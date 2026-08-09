@@ -1,0 +1,23 @@
+# Downloaded and prepared research assets
+_downloads/
+datasets/
+save/
+cache/
+
+# Experiment outputs
+results/
+*.log
+events.out.tfevents.*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -54,6 +54,9 @@ You can use the following command to prepare your environment.
 ```
 pip install -r requirements.txt
 ```
+
+For the verified resource layout, server setup, checkpoint evaluation commands,
+and known paper/code differences, see [REPRODUCTION.md](REPRODUCTION.md).
 ### 2. Dataset
 Download the datasets from [Google Drive](https://drive.google.com/drive/folders/1N0zxkLdvpdjkwayKA2OZIJYP4nfzhOeF?usp=drive_link).
 <details>
