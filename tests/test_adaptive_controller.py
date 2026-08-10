@@ -193,6 +193,43 @@ def test_checkpoint_roundtrip_and_mismatch(tmp_path):
         raise AssertionError("Dataset mismatch must fail fast")
 
 
+def test_separate_pair_towers_remain_lightweight_and_roundtrip(tmp_path):
+    torch.manual_seed(17)
+    model = AdaptiveStrengthController(
+        embedding_dim=4,
+        feature_mode="score_plus_pair",
+        hidden_dim=16,
+        pair_projection_dim=8,
+        dropout=0.0,
+        min_strength=0.2,
+        max_strength=0.95,
+        base_gamma=1.0,
+        max_residual=0.15,
+        similarity_q05=0.1,
+        similarity_q95=0.9,
+        separate_task_towers=True,
+    ).eval()
+    assert model.parameter_count < 500_000
+    manifest = checkpoint_manifest("score_plus_pair")
+    manifest["separate_task_towers"] = True
+    path = tmp_path / "separate-controller.pt"
+    save_controller_checkpoint(path, model, None, 1, manifest)
+    loaded, loaded_manifest, _ = load_controller_checkpoint(
+        path,
+        expected={"feature_mode": "score_plus_pair", "embedding_dim": 4},
+    )
+    score = torch.randn(3, 5)
+    similarity = torch.tensor([0.2, 0.5, 0.8])
+    query = torch.randn(3, 4)
+    reference = torch.randn(3, 4)
+    with torch.no_grad():
+        expected = model(score, similarity, query, reference)
+        actual = loaded(score, similarity, query, reference)
+    torch.testing.assert_close(expected["strength"], actual["strength"])
+    torch.testing.assert_close(expected["gate_probability"], actual["gate_probability"])
+    assert loaded_manifest["separate_task_towers"] is True
+
+
 def test_adaptive_conflicting_explicit_step_fails_fast():
     model = make_generator(rag_enabled=True, start_step=2)
     try:

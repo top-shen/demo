@@ -7,6 +7,7 @@ from retrieval.adaptive_strength_controller import (
     NORMALIZATION_SCHEMA,
     compute_pair_features,
     compute_score_features,
+    controller_config_from_manifest,
     fit_score_normalization,
     fit_similarity_quantiles,
     monotonic_violation_rate,
@@ -56,6 +57,26 @@ def test_controller_train_only_normalization_and_quantiles():
     np.testing.assert_allclose(normalized[train].mean(axis=0), 0.0, atol=1e-6)
     quantiles = fit_similarity_quantiles(raw[:, 0], train)
     assert quantiles["similarity_q05"] < quantiles["similarity_q95"] < raw[3, 0]
+
+
+def test_controller_manifest_defaults_to_legacy_shared_tower():
+    manifest = {
+        "embedding_dim": 8,
+        "feature_mode": "score_only",
+        "hidden_dim": 4,
+        "pair_projection_dim": 4,
+        "dropout": 0.0,
+        "min_strength": 0.2,
+        "max_strength": 0.95,
+        "base_gamma": 1.0,
+        "max_residual": 0.15,
+        "similarity_q05": 0.1,
+        "similarity_q95": 0.9,
+    }
+    legacy = controller_config_from_manifest(manifest)
+    assert legacy["separate_task_towers"] is False
+    manifest["separate_task_towers"] = True
+    assert controller_config_from_manifest(manifest)["separate_task_towers"] is True
 
 
 def test_similarity_confidence_and_base_strength_are_bounded_monotonic():

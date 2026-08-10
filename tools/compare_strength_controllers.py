@@ -110,6 +110,12 @@ def main():
         )
         base_mae = float(np.mean(np.abs(prediction["base_strength"][action] - strength_target)))
         constant_mae = float(np.mean(np.abs(constant_strength - strength_target)))
+        target_steps = prediction["target_start_step"][action]
+        num_steps = int(checkpoint_manifest["num_steps"])
+        base_steps = np.rint(prediction["base_strength"][action] * (num_steps - 1))
+        constant_step = int(round(constant_strength * (num_steps - 1)))
+        base_step_mae = float(np.mean(np.abs(base_steps - target_steps)))
+        constant_step_mae = float(np.mean(np.abs(constant_step - target_steps)))
         probability = prediction["predicted_gate_probability"]
         threshold_metrics = best_balanced_gate_threshold(
             prediction["gate_targets"].astype(np.int8), probability
@@ -135,6 +141,11 @@ def main():
             "beats_base": bool(learned_mae < base_mae),
             "beats_constant": bool(learned_mae < constant_mae),
             "start_step_mae": float(validation_metrics["start_step_mae"]),
+            "base_start_step_mae": base_step_mae,
+            "constant_start_step_mae": constant_step_mae,
+            "beats_constant_start_step": bool(
+                float(validation_metrics["start_step_mae"]) < constant_step_mae
+            ),
             "gate_auroc": validation_metrics.get("gate_auroc"),
             "gate_probability_positive_mean": float(positive_probability.mean()),
             "gate_probability_negative_mean": float(negative_probability.mean()),

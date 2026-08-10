@@ -225,6 +225,11 @@ def build_parser():
         action="store_true",
         help="Ablation: predict bounded strength directly instead of prior + residual.",
     )
+    parser.add_argument(
+        "--separate-task-towers",
+        action="store_true",
+        help="Use independent lightweight feature towers for strength and retrieval gate.",
+    )
     return parser
 
 
@@ -286,6 +291,7 @@ def main():
         "similarity_q05": float(teacher_manifest["similarity_q05"]),
         "similarity_q95": float(teacher_manifest["similarity_q95"]),
         "use_similarity_prior": not args.direct_strength_head,
+        "separate_task_towers": args.separate_task_towers,
     }
     model = AdaptiveStrengthController(**model_config).to(device)
     if model.parameter_count > 500_000:

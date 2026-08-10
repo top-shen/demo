@@ -191,6 +191,7 @@ if nn is not None:
             similarity_q05: float = 0.0,
             similarity_q95: float = 1.0,
             use_similarity_prior: bool = True,
+            separate_task_towers: bool = False,
         ):
             super().__init__()
             if feature_mode not in {"score_only", "score_plus_pair"}:
@@ -208,29 +209,49 @@ if nn is not None:
             self.similarity_q05 = float(similarity_q05)
             self.similarity_q95 = float(similarity_q95)
             self.use_similarity_prior = bool(use_similarity_prior)
+            self.separate_task_towers = bool(separate_task_towers)
             if self.similarity_q95 <= self.similarity_q05:
                 raise ValueError("similarity_q95 must exceed similarity_q05")
 
-            input_dim = len(SCORE_FEATURE_NAMES)
-            self.pair_projection = None
-            if feature_mode == "score_plus_pair":
-                self.pair_projection = nn.Sequential(
+            def make_pair_projection():
+                return nn.Sequential(
                     nn.LayerNorm(2 * self.embedding_dim),
                     nn.Linear(2 * self.embedding_dim, int(pair_projection_dim)),
                     nn.GELU(),
                     nn.Dropout(float(dropout)),
                 )
+
+            def make_trunk(input_dimension):
+                return nn.Sequential(
+                    nn.LayerNorm(input_dimension),
+                    nn.Linear(input_dimension, int(hidden_dim)),
+                    nn.GELU(),
+                    nn.Dropout(float(dropout)),
+                    nn.LayerNorm(int(hidden_dim)),
+                    nn.Linear(int(hidden_dim), int(hidden_dim)),
+                    nn.GELU(),
+                    nn.Dropout(float(dropout)),
+                )
+
+            input_dim = len(SCORE_FEATURE_NAMES)
+            self.pair_projection = None
+            self.strength_pair_projection = None
+            self.gate_pair_projection = None
+            if feature_mode == "score_plus_pair":
                 input_dim += int(pair_projection_dim)
-            self.trunk = nn.Sequential(
-                nn.LayerNorm(input_dim),
-                nn.Linear(input_dim, int(hidden_dim)),
-                nn.GELU(),
-                nn.Dropout(float(dropout)),
-                nn.LayerNorm(int(hidden_dim)),
-                nn.Linear(int(hidden_dim), int(hidden_dim)),
-                nn.GELU(),
-                nn.Dropout(float(dropout)),
-            )
+                if self.separate_task_towers:
+                    self.strength_pair_projection = make_pair_projection()
+                    self.gate_pair_projection = make_pair_projection()
+                else:
+                    self.pair_projection = make_pair_projection()
+            self.trunk = None
+            self.strength_trunk = None
+            self.gate_trunk = None
+            if self.separate_task_towers:
+                self.strength_trunk = make_trunk(input_dim)
+                self.gate_trunk = make_trunk(input_dim)
+            else:
+                self.trunk = make_trunk(input_dim)
             self.residual_head = nn.Linear(int(hidden_dim), 1)
             self.gate_head = nn.Linear(int(hidden_dim), 1)
 
@@ -251,7 +272,8 @@ if nn is not None:
             query_embeddings=None,
             reference_embeddings=None,
         ):
-            features = score_features
+            strength_features = score_features
+            gate_features = score_features
             if self.feature_mode == "score_plus_pair":
                 if query_embeddings is None or reference_embeddings is None:
                     raise ValueError("score_plus_pair requires query and reference embeddings")
@@ -262,10 +284,26 @@ if nn is not None:
                     ],
                     dim=-1,
                 )
-                features = torch.cat([features, self.pair_projection(pair)], dim=-1)
-            hidden = self.trunk(features)
-            raw_strength = self.residual_head(hidden).squeeze(-1)
-            gate_logit = self.gate_head(hidden).squeeze(-1)
+                if self.separate_task_towers:
+                    strength_features = torch.cat(
+                        [score_features, self.strength_pair_projection(pair)], dim=-1
+                    )
+                    gate_features = torch.cat(
+                        [score_features, self.gate_pair_projection(pair)], dim=-1
+                    )
+                else:
+                    features = torch.cat([score_features, self.pair_projection(pair)], dim=-1)
+                    strength_features = features
+                    gate_features = features
+            if self.separate_task_towers:
+                strength_hidden = self.strength_trunk(strength_features)
+                gate_hidden = self.gate_trunk(gate_features)
+            else:
+                hidden = self.trunk(strength_features)
+                strength_hidden = hidden
+                gate_hidden = hidden
+            raw_strength = self.residual_head(strength_hidden).squeeze(-1)
+            gate_logit = self.gate_head(gate_hidden).squeeze(-1)
             confidence, base = self._base_strength(similarity_top1)
             if self.use_similarity_prior:
                 residual = self.max_residual * torch.tanh(raw_strength)
@@ -318,6 +356,7 @@ def controller_config_from_manifest(manifest: Dict) -> Dict:
         raise ValueError(f"Controller manifest is missing fields: {sorted(missing)}")
     config = {name: manifest[name] for name in required}
     config["use_similarity_prior"] = bool(manifest.get("use_similarity_prior", True))
+    config["separate_task_towers"] = bool(manifest.get("separate_task_towers", False))
     return config
 
 

@@ -294,6 +294,19 @@ prior+monotonic、prior without monotonic、direct head without prior/monotonic
 三类 strength MAE，以及仅在 controller-validation 上选择的 balanced-accuracy
 gate threshold。该流程不生成新时间序列，也不读取 dataset valid/test split。
 
+若共享 trunk 出现 gate/strength 多任务干扰，可继续运行独立轻量 task tower
+诊断：
+
+```bash
+DEVICE=cpu bash scripts/synth-m/run_adaptive_decoupled_pilot.sh
+```
+
+`--separate-task-towers` 为可选训练参数，默认关闭，因此旧 checkpoint 的网络结构和
+加载行为保持不变。启用后 gate 与 strength 使用独立的小型 projection/trunk，完整
+`score_plus_pair` 模型仍受 500K 参数上限约束。诊断脚本显式提高 gate loss 权重，
+并比较原始 `max_residual=0.15`、较宽 residual 以及 direct strength head；这些都是
+controller-validation 消融，不会自动替代正式方法定义。
+
 完整 CPU smoke（需要 PyTorch，但不加载真实 LongCLIP/checkpoint/GPU）：
 
 ```bash
