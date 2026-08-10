@@ -11,7 +11,6 @@ import random
 from data import GenerationDataset
 from models.conditional_generator import ConditionalGenerator
 from models.unconditional_generator import UnConditionalGenerator
-from train.trainer import Trainer
 from evaluation.base_evaluator import BaseEvaluator
 
 
@@ -31,6 +30,11 @@ def save_configs(configs, path):
         yaml.dump(configs, f, yaml.SafeDumper)
 
 def train(training_stage, train_configs, model_diff_configs, model_cond_configs, eval_configs,  output_folder):
+    # TensorBoard is a training-only dependency. Importing Trainer at module
+    # load time made evaluation fail on otherwise valid inference environments
+    # where tensorboard is intentionally not installed.
+    from train.trainer import Trainer
+
     train_configs["train"]["output_folder"] = output_folder
 
     dataset = GenerationDataset(train_configs["data"])
