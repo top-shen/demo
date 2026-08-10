@@ -223,10 +223,15 @@ def generation_batch():
 
 def test_rag_disabled_uses_original_gaussian_full_loop():
     model = make_generator(rag_enabled=False)
+    batch = generation_batch()
+    # generate_text permutes [B,L,V] to the non-contiguous [B,V,L] model
+    # layout. randn_like preserves that layout, so the expected tensor must be
+    # sampled from an equivalent template rather than contiguous torch.randn.
+    model_layout = batch["ts"].permute(0, 2, 1)
     torch.manual_seed(123)
-    expected_initial = torch.randn(1, 2, 4)
+    expected_initial = torch.randn_like(model_layout)
     torch.manual_seed(123)
-    model.generate_text(generation_batch(), n_samples=1, sampler="ddim")
+    model.generate_text(batch, n_samples=1, sampler="ddim")
     assert model.rag_retriever.search_calls == 0
     assert model.generator.predict_steps == [3, 2, 1, 0]
     torch.testing.assert_close(model.generator.first_x, expected_initial)
