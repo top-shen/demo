@@ -8,6 +8,7 @@ import tqdm
 import numpy as np
 from scipy import linalg
 import random
+import json
 
 def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
 
@@ -50,6 +51,38 @@ class BaseEvaluator:
         self._init_data(dataset)
         if "clip_config_path" in configs.keys():
             self._init_clip(configs)
+        if self.rag_configs.get("enabled", False):
+            self._init_retrieval()
+
+    def _init_retrieval(self):
+        from retrieval import LongCLIPTextEmbedder, TextRetriever
+
+        index_path = self.rag_configs.get("index_path", "")
+        if not index_path:
+            raise ValueError("rag.index_path is required when RAG is enabled")
+        embedder = None
+        # Evaluation already loads CTTP, whose text branch contains the same
+        # frozen LongCLIP. Reuse it to avoid holding a second ~1.7 GB model.
+        if hasattr(self, "clip") and hasattr(self.clip, "text_enc"):
+            text_encoder = self.clip.text_enc
+            if hasattr(text_encoder, "model") and hasattr(text_encoder, "tokenizer"):
+                embedder = LongCLIPTextEmbedder.from_components(
+                    text_encoder.model,
+                    text_encoder.tokenizer,
+                    text_encoder.device,
+                    int(self.rag_configs.get("query_batch_size", 64)),
+                )
+        retriever = TextRetriever(
+            index_path=index_path,
+            embedding_model_path=self.rag_configs.get("embedding_model_path"),
+            embedding_device=self.rag_configs.get("embedding_device", self.model.device),
+            query_batch_size=int(self.rag_configs.get("query_batch_size", 64)),
+            embedder=embedder,
+            seed=int(self.rag_configs.get("seed", 0)),
+        )
+        if not hasattr(self.model, "configure_retrieval"):
+            raise ValueError("The selected generator does not support RI-VerbalTS retrieval")
+        self.model.configure_retrieval(retriever, self.rag_configs)
 
     def _init_clip(self, configs):
         model_dict = {
@@ -105,6 +138,8 @@ class BaseEvaluator:
         self.n_samples = self.configs["n_samples"]
         self.display_epoch_interval = self.configs["display_interval"]
         self.model_path = self.configs["model_path"]
+        self.max_batches = int(self.configs.get("max_batches", -1))
+        self.rag_configs = dict(self.configs.get("rag", {}))
 
     def _init_model(self, model):
         self.model = model
@@ -132,32 +167,79 @@ class BaseEvaluator:
         all_joint_emb = []
         cttp = 0
         sample_num = 0
+        retrieval_trace = []
+        saved_candidates = []
+        saved_predictions = []
+        saved_targets = []
+        saved_sample_ids = []
+        saved_caption_ids = []
+        saved_captions = []
+        saved_reference_ids = []
+        diverse_reference = bool(
+            self.rag_configs.get("enabled", False)
+            and self.rag_configs.get("diverse_reference", False)
+        )
+        save_pred = bool(save_pred or self.configs.get("save_predictions", False) or diverse_reference)
 
         with torch.no_grad():
             for batch_no, batch in enumerate(self.test_loader):
+                if self.max_batches > 0 and batch_no >= self.max_batches:
+                    break
                 start_time = time.time()
                 multi_preds = self.model.generate(batch, self.n_samples, sampler)
                 multi_preds = multi_preds.permute(0,1,3,2)
-                pred = multi_preds.median(dim=0).values
+                # References are fixed before generating the default candidates,
+                # preserving the paper's elementwise median.  Diverse-reference
+                # mode keeps every candidate and uses candidate 0 for aggregate
+                # metrics because a cross-reference median can erase peaks.
+                if diverse_reference:
+                    pred = multi_preds[0]
+                else:
+                    pred = multi_preds.median(dim=0).values
 
                 ts = batch["ts"].to(self.model.device).float()
                 ts_len = batch["ts_len"].to(self.model.device).int()
-                ts_gt_emb = self.clip.get_ts_coemb(ts, ts_len)
-                cap_tokens = batch["cap"]
-                cap_emb = self.clip.get_text_coemb(cap_tokens, None)
 
                 if "clip_config_path" in self.configs.keys():
+                    cap_tokens = batch["cap"]
+                    cap_emb = self.clip.get_text_coemb(cap_tokens, None)
                     ts_gen_emb = self.clip.get_ts_coemb(pred, ts_len)
                     all_tsgen_emb.append(ts_gen_emb)
                     all_joint_emb.append(torch.cat([ts_gen_emb,cap_emb], dim=-1))
                     cttp += torch.mm(ts_gen_emb, cap_emb.permute(1,0)).trace().item()
                     sample_num += ts_gen_emb.shape[0]
 
+                if self.rag_configs.get("enabled", False):
+                    retrieval_trace.extend(getattr(self.model, "last_retrieval_trace", []))
+                if save_pred:
+                    saved_candidates.append(multi_preds.cpu().numpy())
+                    saved_predictions.append(pred.cpu().numpy())
+                    saved_targets.append(ts.cpu().numpy())
+                    sample_ids = batch.get("sample_id", torch.arange(ts.shape[0]))
+                    caption_ids = batch.get("caption_id", torch.full((ts.shape[0],), -1))
+                    saved_sample_ids.append(np.asarray(sample_ids))
+                    saved_caption_ids.append(np.asarray(caption_ids))
+                    saved_captions.extend([str(caption) for caption in batch["cap"]])
+                    reference_ids = getattr(self.model, "last_reference_ids", [])
+                    if reference_ids:
+                        saved_reference_ids.append(np.asarray(reference_ids, dtype=np.int64))
+
                 end_time = time.time()
                 if (batch_no+1)%self.display_epoch_interval == 0:
                     print("Batch", batch_no, 
                         "Batch Time {:.2f}s".format(end_time-start_time))
-        cttp /= sample_num
+        if sample_num:
+            cttp /= sample_num
+        self._save_rag_outputs(
+            retrieval_trace,
+            saved_candidates,
+            saved_predictions,
+            saved_targets,
+            saved_sample_ids,
+            saved_caption_ids,
+            saved_captions,
+            saved_reference_ids,
+        )
         print("Done!")
         res_dict = {
             "tensorboard":{},
@@ -190,3 +272,43 @@ class BaseEvaluator:
             print("CTTP ", cttp)
 
         return res_dict
+
+    def _save_rag_outputs(
+        self,
+        retrieval_trace,
+        candidates,
+        predictions,
+        targets,
+        sample_ids,
+        caption_ids,
+        captions,
+        reference_ids,
+    ):
+        if self.rag_configs.get("enabled", False):
+            trace_path = self.rag_configs.get("trace_path", "")
+            if trace_path:
+                os.makedirs(os.path.dirname(trace_path) or ".", exist_ok=True)
+                with open(trace_path, "w", encoding="utf-8") as trace_file:
+                    for record in retrieval_trace:
+                        trace_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+                print("Retrieval trace: ", trace_path)
+
+        if not candidates:
+            return
+        prediction_path = self.configs.get("prediction_path", "")
+        if not prediction_path:
+            return
+        os.makedirs(os.path.dirname(prediction_path) or ".", exist_ok=True)
+        # Each batch has [S,B,L,V]; concatenate along B to preserve candidates.
+        payload = {
+            "candidates": np.concatenate(candidates, axis=1),
+            "predictions": np.concatenate(predictions, axis=0),
+            "targets": np.concatenate(targets, axis=0),
+            "test_sample_ids": np.concatenate(sample_ids, axis=0),
+            "query_caption_ids": np.concatenate(caption_ids, axis=0),
+            "query_captions": np.asarray(captions),
+        }
+        if reference_ids:
+            payload["reference_sample_ids"] = np.concatenate(reference_ids, axis=1)
+        np.savez(prediction_path, **payload)
+        print("Predictions: ", prediction_path)

@@ -48,6 +48,8 @@ class CustomSplit(Dataset):
         if len(tmp_ts.shape) == 1:
             tmp_ts = tmp_ts[...,np.newaxis]
         return {"ts": tmp_ts,
+                "sample_id": idx,
+                "caption_id": cap_id,
                 "ts_len": tmp_ts.shape[0],
                 "attrs": self.attrs[idx],
                 "cap": self.caps[idx][cap_id],

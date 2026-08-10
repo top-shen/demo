@@ -1,0 +1,34 @@
+### Dataset ###
+data:
+  name: custom
+  folder: ./datasets/synth-m
+
+### RI-VerbalTS evaluation ###
+eval:
+  n_samples: 10
+  model_path: ""
+  batch_size: 128
+  max_batches: -1
+  display_interval: 1
+  device: cuda:0
+  sampler: ddim
+  cache_folder: ./cache/synth-m
+  save_predictions: true
+  prediction_path: ""
+
+  rag:
+    enabled: true
+    index_path: ./cache/rag/synth-m/train_longclip.npz
+    top_k: 1
+    selection: top1
+    temperature: 1.0
+    seed: 42
+    min_similarity: -1.0
+    start_step: -1
+    strength: 0.4
+    mode: diffusion
+    diverse_reference: false
+    embedding_model_path: ./save/Longclip
+    embedding_device: auto
+    query_batch_size: 64
+    trace_path: ""

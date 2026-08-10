@@ -57,6 +57,9 @@ pip install -r requirements.txt
 
 For the verified resource layout, server setup, checkpoint evaluation commands,
 and known paper/code differences, see [REPRODUCTION.md](REPRODUCTION.md).
+
+For train-only retrieval-initialized inference, index construction, ablations,
+and retrieval trace outputs, see [README_RAG.md](README_RAG.md).
 ### 2. Dataset
 Download the datasets from [Google Drive](https://drive.google.com/drive/folders/1N0zxkLdvpdjkwayKA2OZIJYP4nfzhOeF?usp=drive_link).
 <details>
