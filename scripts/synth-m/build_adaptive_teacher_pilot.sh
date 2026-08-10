@@ -1,4 +1,9 @@
-python tools/build_strength_teacher.py \
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Unbuffered output is important when this command is piped through tee by a
+# long-running pilot wrapper; otherwise query progress can appear frozen.
+python -u tools/build_strength_teacher.py \
   --dataset-folder ./datasets/synth-m --dataset-name synth-m \
   --index-path ./cache/rag/synth-m/train_longclip.npz \
   --longclip-path ./save/Longclip \

@@ -1,4 +1,8 @@
-python tools/build_strength_teacher.py \
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Keep per-query progress visible through tee during long teacher builds.
+python -u tools/build_strength_teacher.py \
   --dataset-folder ./datasets/Weather --dataset-name Weather \
   --index-path ./cache/rag/Weather/train_longclip.npz \
   --longclip-path ./save/Longclip \

@@ -509,15 +509,24 @@ def main():
         json.dumps(signature_payload, sort_keys=True).encode("utf-8")
     ).hexdigest()
 
+    print(
+        f"Preparing teacher build: dataset={args.dataset_name} "
+        f"queries={len(indices)} samples_per_action={args.samples_per_action}",
+        flush=True,
+    )
+    print("Loading LongCLIP retriever and train index...", flush=True)
     embedder = LongCLIPTextEmbedder(
         args.longclip_path, args.embedding_device, args.embedding_batch_size
     )
     retriever = TextRetriever(args.index_path, embedder=embedder, seed=args.seed)
     if retriever.metadata.get("dataset_name") != args.dataset_name:
         raise ValueError("Retrieval index dataset identity does not match --dataset-name")
+    print("Loading frozen VerbalTS generation stack...", flush=True)
     torch, model = _load_generation_stack(args)
+    print(f"Loading frozen semantic scorer ({args.semantic_scorer})...", flush=True)
     scorer = _load_scorer(args)
     num_steps = int(model.generator.num_steps)
+    print("Teacher generation stack ready.", flush=True)
 
     parts = []
     progress_path = output_manifest.with_name(output_manifest.stem + ".progress.json")
@@ -561,7 +570,11 @@ def main():
             ),
             encoding="utf-8",
         )
-        print(f"teacher query {progress}/{len(indices)}: sample={sample_id} caption={caption_id}")
+        print(
+            f"teacher query {progress}/{len(indices)}: "
+            f"sample={sample_id} caption={caption_id}",
+            flush=True,
+        )
 
     payload, normalization, quantiles = assemble_payload(parts, strengths, num_steps, args)
     sweep_path = output_npz.with_name(output_npz.stem + "_fixed_sweep.json")
