@@ -264,6 +264,20 @@ bash scripts/synth-m/run_adaptive_pilot_end_to_end.sh
 
 该总控脚本不会启动 full teacher build。可通过环境变量覆盖 pilot 设置，例如 `DEVICE=cuda:1 EPOCHS=30 bash scripts/synth-m/run_adaptive_pilot_end_to_end.sh`。
 
+8-query smoke 全部通过后，使用下面的一条命令运行默认 256-query 的
+train-only 中型开发 pilot：
+
+```bash
+bash scripts/synth-m/run_adaptive_medium_pilot.sh
+```
+
+该脚本可断点续建 Teacher，并训练、分析 `score_only` 与
+`score_plus_pair`。它只使用 Teacher 内按 sample ID 分组的
+controller-train/controller-validation，不运行 dataset test evaluation。默认参数可通过环境变量覆盖，例如
+`MAX_QUERIES=512 SAMPLES_PER_ACTION=3 DEVICE=cuda:1 bash scripts/synth-m/run_adaptive_medium_pilot.sh`。
+`epsilon_sem=0.01` 与 copy threshold `0.05` 在此阶段仍标记为 train-only
+provisional 参数，不应当作已经锁定的论文设置。
+
 完整 CPU smoke（需要 PyTorch，但不加载真实 LongCLIP/checkpoint/GPU）：
 
 ```bash
