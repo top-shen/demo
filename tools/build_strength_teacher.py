@@ -87,15 +87,18 @@ def _part_path(cache_dir: Path, sample_id: int, caption_id: int) -> Path:
     return cache_dir / f"sample_{int(sample_id):08d}_caption_{int(caption_id):03d}.npz"
 
 
-def _standardize_ts(values):
+def _standardize_single_ts(values):
+    """Return one time series in canonical [L,V] layout."""
     values = np.asarray(values, dtype=np.float32)
-    if values.ndim == 2:
-        values = values[..., None]
+    if values.ndim == 1:
+        values = values[:, None]
+    if values.ndim != 2:
+        raise ValueError(f"Expected one time series with shape [L] or [L,V], got {values.shape}")
     return values
 
 
 def _make_generation_batch(torch, caption, sample_id, caption_id, target_ts, device):
-    target = _standardize_ts(target_ts[None, ...])
+    target = _standardize_single_ts(target_ts)[None, ...]
     length = target.shape[1]
     return {
         "ts": torch.as_tensor(target, dtype=torch.float32),
@@ -205,7 +208,7 @@ def generate_query_part(
     top_rows = np.asarray(search["rows"][0], dtype=np.int64)
     query_embedding = np.asarray(search["query_embeddings"][0], dtype=np.float32)
     reference_embedding = np.asarray(retriever.embeddings[top_rows[0]], dtype=np.float32)
-    reference_ts = _standardize_ts(result["reference_ts"])
+    reference_ts = _standardize_single_ts(result["reference_ts"])
     batch = _make_generation_batch(torch, caption, sample_id, caption_id, target_ts, args.device)
     length = np.asarray([reference_ts.shape[0]], dtype=np.int32)
     base_seed = int(args.seed) * 1000003 + int(sample_id) * 101 + int(caption_id)
@@ -229,7 +232,7 @@ def generate_query_part(
         real_embedding = None
         if hasattr(scorer, "embed"):
             real_embedding, _ = scorer.embed(
-                [caption], _standardize_ts(target_ts[None, ...]), length
+                [caption], _standardize_single_ts(target_ts)[None, ...], length
             )
 
         common = {

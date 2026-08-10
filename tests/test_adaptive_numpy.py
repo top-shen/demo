@@ -23,7 +23,7 @@ from retrieval.strength_teacher import (
     save_teacher_dataset,
     validate_teacher_payload,
 )
-from tools.build_strength_teacher import prepare_generation_configs
+from tools.build_strength_teacher import _standardize_single_ts, prepare_generation_configs
 
 
 def test_score_features_and_entropy():
@@ -201,3 +201,13 @@ def test_teacher_builder_injects_run_time_text_defaults():
     assert prepared_cond["cond_modal"] == "simple_text"
     assert prepared_cond["text"]["pos_emb"] == "none"
     assert prepared_cond["text"]["output_type"] == "all"
+
+
+def test_teacher_builder_preserves_single_series_layout():
+    multivariate = np.zeros((128, 2), dtype=np.float32)
+    univariate = np.zeros(128, dtype=np.float32)
+    assert _standardize_single_ts(multivariate).shape == (128, 2)
+    assert _standardize_single_ts(univariate).shape == (128, 1)
+    generated = np.zeros((1, 128, 2), dtype=np.float32)
+    reference = _standardize_single_ts(multivariate)[None, ...]
+    assert generated_to_reference_distance(generated, reference).shape == (1,)
