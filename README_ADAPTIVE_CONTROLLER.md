@@ -278,6 +278,22 @@ controller-train/controller-validation，不运行 dataset test evaluation。默
 `epsilon_sem=0.01` 与 copy threshold `0.05` 在此阶段仍标记为 train-only
 provisional 参数，不应当作已经锁定的论文设置。
 
+若中型 pilot 显示 copy constraint 未激活、gate 恒为 use，或 learned strength
+未超过常数/prior 基线，可在不重新运行 diffusion 的情况下执行修复诊断：
+
+```bash
+bash scripts/synth-m/run_adaptive_repair_pilot.sh
+```
+
+默认修复设置仅由训练数据得到：`epsilon_sem` 取中型 pilot Original CTTP
+均值的 1%，copy threshold 取 8192 个随机不同训练序列对 RMSE 的 q05。脚本会把
+重标后的 Teacher 写入新文件，不覆盖原 Teacher；随后显式记录
+`negative/positive` gate class weight，并训练 `score_only`/`score_plus_pair` 的
+prior+monotonic、prior without monotonic、direct head without prior/monotonic
+六组诊断模型。最后输出 learned、similarity prior、controller-train constant
+三类 strength MAE，以及仅在 controller-validation 上选择的 balanced-accuracy
+gate threshold。该流程不生成新时间序列，也不读取 dataset valid/test split。
+
 完整 CPU smoke（需要 PyTorch，但不加载真实 LongCLIP/checkpoint/GPU）：
 
 ```bash

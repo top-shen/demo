@@ -24,6 +24,8 @@ from retrieval.strength_teacher import (
     validate_teacher_payload,
 )
 from tools.build_strength_teacher import _standardize_single_ts, prepare_generation_configs
+from tools.compare_strength_controllers import best_balanced_gate_threshold
+from tools.relabel_strength_teacher import relabel_payload
 
 
 def test_score_features_and_entropy():
@@ -99,6 +101,30 @@ def test_copy_constraint_removes_copying_candidate():
     )
     np.testing.assert_array_equal(result["feasible_masks"], [[False, True]])
     np.testing.assert_allclose(result["soft_strength_targets"], [0.5])
+
+
+def test_teacher_relabel_reuses_candidates_without_mutating_source():
+    source = {
+        "candidate_strengths": np.asarray([0.2, 0.8], dtype=np.float32),
+        "candidate_semantic_scores": np.asarray([[0.9, 0.89]], dtype=np.float32),
+        "original_semantic_scores": np.asarray([0.9], dtype=np.float32),
+        "candidate_copy_distances": np.asarray([[0.1, 0.7]], dtype=np.float32),
+        "gate_targets": np.asarray([0.0], dtype=np.float32),
+    }
+    relabeled = relabel_payload(source, 0.02, 0.1, copy_threshold=0.5)
+    np.testing.assert_array_equal(relabeled["feasible_masks"], [[False, True]])
+    np.testing.assert_allclose(relabeled["soft_strength_targets"], [0.8])
+    np.testing.assert_array_equal(source["gate_targets"], [0.0])
+    assert relabeled["candidate_semantic_scores"] is not source["candidate_semantic_scores"]
+
+
+def test_balanced_gate_threshold_calibration():
+    result = best_balanced_gate_threshold(
+        [1, 1, 0, 0], [0.9, 0.8, 0.4, 0.1]
+    )
+    assert result["gate_balanced_accuracy"] == 1.0
+    assert result["gate_tp"] == 2
+    assert result["gate_tn"] == 2
 
 
 def test_dimension_normalized_rmse():
