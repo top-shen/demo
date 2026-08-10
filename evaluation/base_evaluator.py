@@ -55,7 +55,8 @@ class BaseEvaluator:
             self._init_retrieval()
 
     def _init_retrieval(self):
-        from retrieval import LongCLIPTextEmbedder, TextRetriever
+        from retrieval import LongCLIPTextEmbedder, TextRetriever, load_controller_checkpoint
+        from retrieval.strength_teacher import sha256_file
 
         index_path = self.rag_configs.get("index_path", "")
         if not index_path:
@@ -80,9 +81,40 @@ class BaseEvaluator:
             embedder=embedder,
             seed=int(self.rag_configs.get("seed", 0)),
         )
+        adaptive_config = dict(self.rag_configs.get("adaptive_controller", {}))
+        controller = None
+        controller_manifest = None
+        if adaptive_config.get("enabled", False) and self.rag_configs.get("mode", "diffusion") != "retrieval_only":
+            if int(self.rag_configs.get("start_step", -1)) >= 0:
+                raise ValueError(
+                    "rag.start_step and adaptive_controller.enabled cannot be used together"
+                )
+            checkpoint_path = adaptive_config.get("checkpoint_path", "")
+            if not checkpoint_path:
+                raise ValueError(
+                    "rag.adaptive_controller.checkpoint_path is required when enabled"
+                )
+            expected = {
+                "dataset_identity": retriever.metadata.get("dataset_name"),
+                "embedding_dim": int(retriever.embeddings.shape[1]),
+                "feature_mode": adaptive_config.get("feature_mode", "score_only"),
+                "num_steps": int(self.model.generator.num_steps),
+                "retrieval_index_sha256": sha256_file(index_path),
+            }
+            for key in ("min_strength", "max_strength", "base_gamma", "max_residual"):
+                if key in adaptive_config:
+                    expected[key] = float(adaptive_config[key])
+            controller, controller_manifest, _ = load_controller_checkpoint(
+                checkpoint_path, device=self.model.device, expected=expected
+            )
         if not hasattr(self.model, "configure_retrieval"):
             raise ValueError("The selected generator does not support RI-VerbalTS retrieval")
-        self.model.configure_retrieval(retriever, self.rag_configs)
+        self.model.configure_retrieval(
+            retriever,
+            self.rag_configs,
+            controller=controller,
+            controller_manifest=controller_manifest,
+        )
 
     def _init_clip(self, configs):
         model_dict = {
@@ -175,6 +207,14 @@ class BaseEvaluator:
         saved_caption_ids = []
         saved_captions = []
         saved_reference_ids = []
+        saved_per_sample_cttp = []
+        saved_controller_strengths = []
+        saved_start_steps = []
+        saved_gate_probabilities = []
+        saved_selected_reference_ids = []
+        saved_copy_distances = []
+        saved_controller_actions = []
+        saved_fallback_reasons = []
         diverse_reference = bool(
             self.rag_configs.get("enabled", False)
             and self.rag_configs.get("diverse_reference", False)
@@ -206,11 +246,82 @@ class BaseEvaluator:
                     ts_gen_emb = self.clip.get_ts_coemb(pred, ts_len)
                     all_tsgen_emb.append(ts_gen_emb)
                     all_joint_emb.append(torch.cat([ts_gen_emb,cap_emb], dim=-1))
-                    cttp += torch.mm(ts_gen_emb, cap_emb.permute(1,0)).trace().item()
+                    per_sample_cttp = (ts_gen_emb * cap_emb).sum(dim=-1)
+                    cttp += per_sample_cttp.sum().item()
                     sample_num += ts_gen_emb.shape[0]
+                    saved_per_sample_cttp.append(
+                        per_sample_cttp.detach().cpu().numpy().astype(np.float32)
+                    )
+                else:
+                    saved_per_sample_cttp.append(
+                        np.full(pred.shape[0], np.nan, dtype=np.float32)
+                    )
 
-                if self.rag_configs.get("enabled", False):
-                    retrieval_trace.extend(getattr(self.model, "last_retrieval_trace", []))
+                generation_metadata = getattr(self.model, "last_generation_metadata", [])
+                if not generation_metadata:
+                    diffusion_model = getattr(self.model, "generator", self.model)
+                    full_start_step = int(getattr(diffusion_model, "num_steps", 1)) - 1
+                    generation_metadata = [
+                        {
+                            "reference_sample_id": -1,
+                            "controller_strength": np.nan,
+                            "start_step": full_start_step,
+                            "gate_probability": np.nan,
+                            "controller_action": "original_gaussian",
+                            "fallback_reason": "original_rag_disabled",
+                        }
+                        for _ in range(pred.shape[0])
+                    ]
+                saved_controller_strengths.append(
+                    np.asarray(
+                        [item["controller_strength"] for item in generation_metadata],
+                        dtype=np.float32,
+                    )
+                )
+                saved_start_steps.append(
+                    np.asarray([item["start_step"] for item in generation_metadata], dtype=np.int64)
+                )
+                saved_gate_probabilities.append(
+                    np.asarray(
+                        [item["gate_probability"] for item in generation_metadata],
+                        dtype=np.float32,
+                    )
+                )
+                selected_ids = np.asarray(
+                    [item["reference_sample_id"] for item in generation_metadata],
+                    dtype=np.int64,
+                )
+                saved_selected_reference_ids.append(selected_ids)
+                saved_controller_actions.extend(
+                    [str(item["controller_action"]) for item in generation_metadata]
+                )
+                saved_fallback_reasons.extend(
+                    [
+                        "" if item["fallback_reason"] is None else str(item["fallback_reason"])
+                        for item in generation_metadata
+                    ]
+                )
+                copy_distances = np.full(pred.shape[0], np.nan, dtype=np.float32)
+                if self.rag_configs.get("enabled", False) and hasattr(
+                    getattr(self.model, "rag_retriever", None), "get_reference_ts"
+                ):
+                    pred_numpy = pred.detach().cpu().numpy()
+                    for row, reference_id in enumerate(selected_ids):
+                        if reference_id < 0:
+                            continue
+                        reference = np.asarray(
+                            self.model.rag_retriever.get_reference_ts(int(reference_id)),
+                            dtype=np.float32,
+                        )
+                        if reference.ndim == 1:
+                            reference = reference[:, None]
+                        if reference.shape == pred_numpy[row].shape:
+                            copy_distances[row] = float(
+                                np.sqrt(np.mean(np.square(pred_numpy[row] - reference)))
+                            )
+                saved_copy_distances.append(copy_distances)
+
+                retrieval_trace.extend(getattr(self.model, "last_retrieval_trace", []))
                 if save_pred:
                     saved_candidates.append(multi_preds.cpu().numpy())
                     saved_predictions.append(pred.cpu().numpy())
@@ -239,6 +350,14 @@ class BaseEvaluator:
             saved_caption_ids,
             saved_captions,
             saved_reference_ids,
+            saved_per_sample_cttp,
+            saved_controller_strengths,
+            saved_start_steps,
+            saved_gate_probabilities,
+            saved_selected_reference_ids,
+            saved_copy_distances,
+            saved_controller_actions,
+            saved_fallback_reasons,
         )
         print("Done!")
         res_dict = {
@@ -283,15 +402,22 @@ class BaseEvaluator:
         caption_ids,
         captions,
         reference_ids,
+        per_sample_cttp,
+        controller_strengths,
+        start_steps,
+        gate_probabilities,
+        selected_reference_ids,
+        copy_distances,
+        controller_actions,
+        fallback_reasons,
     ):
-        if self.rag_configs.get("enabled", False):
-            trace_path = self.rag_configs.get("trace_path", "")
-            if trace_path:
-                os.makedirs(os.path.dirname(trace_path) or ".", exist_ok=True)
-                with open(trace_path, "w", encoding="utf-8") as trace_file:
-                    for record in retrieval_trace:
-                        trace_file.write(json.dumps(record, ensure_ascii=False) + "\n")
-                print("Retrieval trace: ", trace_path)
+        trace_path = self.rag_configs.get("trace_path", "")
+        if trace_path:
+            os.makedirs(os.path.dirname(trace_path) or ".", exist_ok=True)
+            with open(trace_path, "w", encoding="utf-8") as trace_file:
+                for record in retrieval_trace:
+                    trace_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+            print("Retrieval trace: ", trace_path)
 
         if not candidates:
             return
@@ -307,6 +433,16 @@ class BaseEvaluator:
             "test_sample_ids": np.concatenate(sample_ids, axis=0),
             "query_caption_ids": np.concatenate(caption_ids, axis=0),
             "query_captions": np.asarray(captions),
+            "per_sample_cttp": np.concatenate(per_sample_cttp, axis=0),
+            "controller_strengths": np.concatenate(controller_strengths, axis=0),
+            "controller_start_steps": np.concatenate(start_steps, axis=0),
+            "controller_gate_probabilities": np.concatenate(gate_probabilities, axis=0),
+            "selected_reference_sample_ids": np.concatenate(
+                selected_reference_ids, axis=0
+            ),
+            "generated_to_reference_distances": np.concatenate(copy_distances, axis=0),
+            "controller_actions": np.asarray(controller_actions),
+            "fallback_reasons": np.asarray(fallback_reasons),
         }
         if reference_ids:
             payload["reference_sample_ids"] = np.concatenate(reference_ids, axis=1)

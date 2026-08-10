@@ -234,23 +234,58 @@ class TextRetriever:
             embedder = LongCLIPTextEmbedder(model_path, embedding_device, query_batch_size)
         self.embedder = embedder
 
-    def search(self, query_captions: Sequence[str], top_k: int) -> Dict:
+    def search(
+        self,
+        query_captions: Sequence[str],
+        top_k: int,
+        exclude_sample_ids: Optional[Sequence[Optional[Iterable[int]]]] = None,
+    ) -> Dict:
+        """Return cosine Top-K results, optionally excluding samples per query.
+
+        Exclusions are expressed in time-series sample IDs, not caption-row IDs.
+        This is important for datasets such as Weather where every series owns
+        multiple captions.  The default remains backward compatible and applies
+        no exclusion.
+        """
         if top_k < 1:
             raise ValueError("rag_top_k must be at least 1")
-        top_k = min(int(top_k), self.embeddings.shape[0])
+        requested_top_k = int(top_k)
         query_embeddings = _normalize_embeddings(self.embedder.encode(list(query_captions)))
+        if query_embeddings.shape[0] != len(query_captions):
+            raise ValueError("Query embedding count does not match the number of captions")
         if query_embeddings.shape[1] != self.embeddings.shape[1]:
             raise ValueError(
                 f"Query embedding dim {query_embeddings.shape[1]} does not match index dim "
                 f"{self.embeddings.shape[1]}"
             )
+        if exclude_sample_ids is None:
+            exclude_sample_ids = [None] * len(query_captions)
+        if len(exclude_sample_ids) != len(query_captions):
+            raise ValueError("exclude_sample_ids must have one entry per query")
+
         similarities = query_embeddings @ self.embeddings.T
-        # argpartition avoids a complete sort of every training caption.  The
-        # selected K rows are then deterministically ordered by score and row.
-        candidate_rows = np.argpartition(-similarities, top_k - 1, axis=1)[:, :top_k]
         ordered_rows = []
         ordered_scores = []
-        for query_no, rows in enumerate(candidate_rows):
+        for query_no, excluded in enumerate(exclude_sample_ids):
+            if excluded is None:
+                excluded_set = set()
+            elif np.isscalar(excluded):
+                excluded_set = {int(excluded)}
+            else:
+                excluded_set = {int(value) for value in excluded}
+            eligible = ~np.isin(self.sample_ids, np.asarray(sorted(excluded_set), dtype=np.int64))
+            eligible_rows = np.flatnonzero(eligible)
+            if eligible_rows.size < requested_top_k:
+                raise ValueError(
+                    "Not enough eligible retrieval records after sample exclusion: "
+                    f"query={query_no}, requested_top_k={requested_top_k}, "
+                    f"eligible={eligible_rows.size}, excluded_sample_ids={sorted(excluded_set)}"
+                )
+            # Partition over all eligible rows. This safely expands beyond any
+            # initially high-scoring captions that belonged to excluded samples.
+            eligible_scores = similarities[query_no, eligible_rows]
+            local = np.argpartition(-eligible_scores, requested_top_k - 1)[:requested_top_k]
+            rows = eligible_rows[local]
             scores = similarities[query_no, rows]
             order = np.lexsort((rows, -scores))
             ordered_rows.append(rows[order])
@@ -259,6 +294,7 @@ class TextRetriever:
             "query_embeddings": query_embeddings,
             "rows": np.stack(ordered_rows),
             "scores": np.stack(ordered_scores).astype(np.float32),
+            "exclusion_enabled": any(item is not None for item in exclude_sample_ids),
         }
 
     def _rng(self, query_key: int, candidate_index: int) -> np.random.Generator:
@@ -347,10 +383,13 @@ class TextRetriever:
         min_similarity: float = -1.0,
         candidate_index: int = 0,
         random_reference: bool = False,
+        exclude_sample_ids: Optional[Sequence[Optional[Iterable[int]]]] = None,
     ) -> List[Dict]:
         if query_sample_ids is None:
             query_sample_ids = list(range(len(query_captions)))
-        search_result = self.search(query_captions, top_k)
+        search_result = self.search(
+            query_captions, top_k, exclude_sample_ids=exclude_sample_ids
+        )
         return self.select(
             search_result,
             query_captions,
@@ -361,3 +400,10 @@ class TextRetriever:
             candidate_index=candidate_index,
             random_reference=random_reference,
         )
+
+    def get_reference_ts(self, sample_id: int) -> np.ndarray:
+        """Return a stored training series by stable sample ID."""
+        sample_id = int(sample_id)
+        if sample_id not in self._sample_to_ts_row:
+            raise KeyError(f"Unknown retrieval sample ID: {sample_id}")
+        return self.train_ts[self._sample_to_ts_row[sample_id]]

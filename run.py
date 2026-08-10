@@ -182,6 +182,18 @@ parser.add_argument("--rag_query_batch_size", type=int, default=None)
 parser.add_argument("--rag_save_predictions", type=str2bool, default=None)
 parser.add_argument("--rag_trace_path", type=str, default=None)
 parser.add_argument("--rag_prediction_path", type=str, default=None)
+parser.add_argument("--rag_adaptive_enabled", type=str2bool, default=None)
+parser.add_argument("--rag_controller_checkpoint_path", type=str, default=None)
+parser.add_argument(
+    "--rag_controller_feature_mode",
+    choices=["score_only", "score_plus_pair"],
+    default=None,
+)
+parser.add_argument("--rag_controller_min_strength", type=float, default=None)
+parser.add_argument("--rag_controller_max_strength", type=float, default=None)
+parser.add_argument("--rag_controller_base_gamma", type=float, default=None)
+parser.add_argument("--rag_controller_max_residual", type=float, default=None)
+parser.add_argument("--rag_controller_gate_threshold", type=float, default=None)
 
 args = parser.parse_args()
 
@@ -246,6 +258,32 @@ rag_overrides = {
 for key, value in rag_overrides.items():
     if value is not None:
         rag_configs[key] = value
+adaptive_defaults = {
+    "enabled": False,
+    "checkpoint_path": "",
+    "feature_mode": "score_only",
+    "min_strength": 0.20,
+    "max_strength": 0.95,
+    "base_gamma": 1.0,
+    "max_residual": 0.15,
+    "gate_threshold": 0.50,
+}
+adaptive_configs = rag_configs.setdefault("adaptive_controller", {})
+for key, value in adaptive_defaults.items():
+    adaptive_configs.setdefault(key, value)
+adaptive_overrides = {
+    "enabled": args.rag_adaptive_enabled,
+    "checkpoint_path": args.rag_controller_checkpoint_path,
+    "feature_mode": args.rag_controller_feature_mode,
+    "min_strength": args.rag_controller_min_strength,
+    "max_strength": args.rag_controller_max_strength,
+    "base_gamma": args.rag_controller_base_gamma,
+    "max_residual": args.rag_controller_max_residual,
+    "gate_threshold": args.rag_controller_gate_threshold,
+}
+for key, value in adaptive_overrides.items():
+    if value is not None:
+        adaptive_configs[key] = value
 if args.rag_save_predictions is not None:
     eval_configs["eval"]["save_predictions"] = args.rag_save_predictions
 if args.rag_prediction_path is not None:

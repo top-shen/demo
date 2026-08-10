@@ -74,7 +74,21 @@ def main():
         )[0]
         assert fallback["fallback"] and fallback["reference_ts"] is None
         print("PASS minimum-similarity fallback")
-        print("6 dependency-light retrieval checks passed")
+
+        excluded = retriever.retrieve(
+            ["a0"], [0], top_k=3, exclude_sample_ids=[[0]]
+        )[0]
+        assert excluded["top_k_sample_ids"] == [1, 1, 1]
+        print("PASS leave-one-series-out excludes all Weather captions")
+
+        try:
+            retriever.search(["a0"], 4, exclude_sample_ids=[[0]])
+        except ValueError as error:
+            assert "eligible=3" in str(error)
+        else:
+            raise AssertionError("Expected an explicit insufficient Top-K error")
+        print("PASS excluded Top-K shortage is explicit")
+        print("8 dependency-light retrieval checks passed")
 
 
 if __name__ == "__main__":

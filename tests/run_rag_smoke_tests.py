@@ -13,14 +13,17 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import test_retrieval
+import test_adaptive_controller
 
 
 def main():
-    tests = [
-        function
-        for name, function in inspect.getmembers(test_retrieval, inspect.isfunction)
-        if name.startswith("test_")
-    ]
+    tests = []
+    for module in (test_retrieval, test_adaptive_controller):
+        tests.extend(
+            function
+            for name, function in inspect.getmembers(module, inspect.isfunction)
+            if name.startswith("test_")
+        )
     for test in tests:
         parameters = inspect.signature(test).parameters
         if "tmp_path" in parameters:

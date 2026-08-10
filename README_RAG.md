@@ -1,5 +1,7 @@
 # Retrieval-Initialized VerbalTS (RI-VerbalTS), phase 1
 
+> Phase 2 的可学习逐样本 strength/gate、train-only teacher 构建、配置与实验协议见 [README_ADAPTIVE_CONTROLLER.md](README_ADAPTIVE_CONTROLLER.md)。本页继续保留 phase-1 fixed-strength RAG 定义。
+
 This module adds inference-time, text-to-text retrieval initialization to the
 released VerbalTS generator. It does not change the training loss, add a
 reference encoder, perform retrieval-aware fine-tuning, or implement CTTP
@@ -192,6 +194,7 @@ arrays; they do not load PyTorch, LongCLIP, a checkpoint, or a GPU:
 
 ```bash
 python tests/run_numpy_retrieval_tests.py
+python tests/run_adaptive_numpy_tests.py
 ```
 
 The complete CPU-oriented smoke suite requires the repository's normal
@@ -203,7 +206,8 @@ python tests/run_rag_smoke_tests.py
 python -m pytest tests/test_retrieval.py -q
 ```
 
-They cover train-only indexing, Weather caption mapping, normalization,
+They cover train-only indexing, Weather caption mapping, leave-one-series-out,
+normalization,
 deterministic Top-1, seeded Top-K sampling, similarity fallback, reference
 tensor conversion, reuse of the DDPM forward formula, the disabled baseline
 path, reverse-loop bounds, and retrieval-only bypass. Real LongCLIP indexing
@@ -212,7 +216,9 @@ pinned PyTorch/Transformers stack and, for practical speed, a supported GPU.
 
 ### Verification record for this implementation
 
-On 2026-08-10, the dependency-light suite passed all 6 checks. Temporary
+On 2026-08-10, the phase-1 dependency-light suite passed its original 6 checks. The
+current expanded runners additionally cover exclusion and adaptive-controller
+math/schema checks. Temporary
 schema indexes using deterministic test embeddings built successfully from the
 complete released training arrays:
 Synth-M produced 24,000 caption records for 24,000 series with shape

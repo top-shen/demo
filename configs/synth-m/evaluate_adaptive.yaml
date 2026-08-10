@@ -3,7 +3,7 @@ data:
   name: custom
   folder: ./datasets/synth-m
 
-### RI-VerbalTS evaluation ###
+### Learned retrieval-adaptive RI-VerbalTS evaluation ###
 eval:
   n_samples: 10
   model_path: ""
@@ -15,11 +15,10 @@ eval:
   cache_folder: ./cache/synth-m
   save_predictions: true
   prediction_path: ""
-
   rag:
     enabled: true
     index_path: ./cache/rag/synth-m/train_longclip.npz
-    top_k: 1
+    top_k: 4
     selection: top1
     temperature: 1.0
     seed: 42
@@ -32,11 +31,10 @@ eval:
     embedding_device: auto
     query_batch_size: 64
     trace_path: ""
-
     adaptive_controller:
-      enabled: false
-      checkpoint_path: ""
-      feature_mode: score_only
+      enabled: true
+      checkpoint_path: ./save/adaptive_controller/synth-m/score_plus_pair/best.pt
+      feature_mode: score_plus_pair
       min_strength: 0.20
       max_strength: 0.95
       base_gamma: 1.0

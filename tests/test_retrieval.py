@@ -105,6 +105,41 @@ def test_min_similarity_triggers_fallback(tmp_path):
     assert result["reference_sample_id"] is None
 
 
+def test_synth_leave_one_series_out_excludes_same_sample(tmp_path):
+    index_path, embedder = build_small_index(tmp_path)
+    result = TextRetriever(index_path, embedder=embedder).retrieve(
+        ["train-a"],
+        [0],
+        top_k=2,
+        exclude_sample_ids=[[0]],
+    )[0]
+    assert result["reference_sample_id"] != 0
+    assert 0 not in result["top_k_sample_ids"]
+
+
+def test_weather_leave_one_series_out_excludes_all_three_captions(tmp_path):
+    index_path, embedder = build_small_index(tmp_path, weather=True)
+    result = TextRetriever(index_path, embedder=embedder).retrieve(
+        ["w00"],
+        [0],
+        top_k=3,
+        exclude_sample_ids=[[0]],
+    )[0]
+    assert result["top_k_sample_ids"] == [1, 1, 1]
+    assert set(result["top_k_caption_ids"]) == {0, 1, 2}
+
+
+def test_exclusion_reports_topk_shortage(tmp_path):
+    index_path, embedder = build_small_index(tmp_path, weather=True)
+    retriever = TextRetriever(index_path, embedder=embedder)
+    try:
+        retriever.search(["w00"], 4, exclude_sample_ids=[[0]])
+    except ValueError as error:
+        assert "eligible=3" in str(error)
+    else:
+        raise AssertionError("Expected a clear Top-K eligibility error")
+
+
 def test_reference_tensor_shape_dtype_and_device():
     like = torch.zeros(2, 2, 4, dtype=torch.float64)
     result = [
@@ -235,6 +270,7 @@ def test_rag_disabled_uses_original_gaussian_full_loop():
     assert model.rag_retriever.search_calls == 0
     assert model.generator.predict_steps == [3, 2, 1, 0]
     torch.testing.assert_close(model.generator.first_x, expected_initial)
+    assert model.last_retrieval_trace[0]["fallback_reason"] == "original_rag_disabled"
 
 
 def test_rag_reverse_loop_starts_at_configured_step():

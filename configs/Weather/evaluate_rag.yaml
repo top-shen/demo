@@ -32,3 +32,13 @@ eval:
     embedding_device: auto
     query_batch_size: 64
     trace_path: ""
+
+    adaptive_controller:
+      enabled: false
+      checkpoint_path: ""
+      feature_mode: score_only
+      min_strength: 0.20
+      max_strength: 0.95
+      base_gamma: 1.0
+      max_residual: 0.15
+      gate_threshold: 0.50

@@ -60,6 +60,9 @@ and known paper/code differences, see [REPRODUCTION.md](REPRODUCTION.md).
 
 For train-only retrieval-initialized inference, index construction, ablations,
 and retrieval trace outputs, see [README_RAG.md](README_RAG.md).
+
+For the train-only teacher pipeline and learnable per-sample retrieval-adaptive
+strength/gate controller, see [README_ADAPTIVE_CONTROLLER.md](README_ADAPTIVE_CONTROLLER.md).
 ### 2. Dataset
 Download the datasets from [Google Drive](https://drive.google.com/drive/folders/1N0zxkLdvpdjkwayKA2OZIJYP4nfzhOeF?usp=drive_link).
 <details>
