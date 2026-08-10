@@ -1,6 +1,7 @@
 import numpy as np
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from retrieval.adaptive_strength_controller import (
     NORMALIZATION_SCHEMA,
@@ -22,6 +23,7 @@ from retrieval.strength_teacher import (
     save_teacher_dataset,
     validate_teacher_payload,
 )
+from tools.build_strength_teacher import prepare_generation_configs
 
 
 def test_score_features_and_entropy():
@@ -176,3 +178,26 @@ def test_teacher_schema_roundtrip():
         loaded, manifest = load_teacher_dataset(npz_path, manifest_path, for_training=True)
         np.testing.assert_array_equal(loaded["query_sample_ids"], [0, 1])
         assert manifest["split"] == "train"
+
+
+def test_teacher_builder_injects_run_time_text_defaults():
+    diff = {"diffusion": {"multipatch_num": 2, "L_patch_len": 2}}
+    cond = {"text": {"num_stages": 3}}
+    args = SimpleNamespace(
+        device="cuda:0",
+        cond_modal="simple_text",
+        text_output_type="all",
+        text_pos_emb="none",
+        base_patch=4,
+        multipatch_num=3,
+        patch_length=3,
+        diff_stage_num=3,
+    )
+    prepared_diff, prepared_cond = prepare_generation_configs(diff, cond, args)
+    assert prepared_diff["generator_pretrain_path"] == ""
+    assert prepared_diff["diffusion"]["base_patch"] == 4
+    assert prepared_diff["diffusion"]["multipatch_num"] == 3
+    assert prepared_diff["diffusion"]["L_patch_len"] == 3
+    assert prepared_cond["cond_modal"] == "simple_text"
+    assert prepared_cond["text"]["pos_emb"] == "none"
+    assert prepared_cond["text"]["output_type"] == "all"

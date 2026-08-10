@@ -8,6 +8,7 @@ multi-day diffusion sweep.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import sys
@@ -111,19 +112,17 @@ def _aggregate_generation(torch, output):
     return output.median(dim=0).values.permute(0, 2, 1).detach().cpu().numpy()
 
 
-def _load_generation_stack(args):
-    import torch
-    import yaml
-
-    from models.conditional_generator import ConditionalGenerator
-
-    diff = yaml.safe_load(Path(args.diff_config).read_text(encoding="utf-8"))
-    cond = yaml.safe_load(Path(args.cond_config).read_text(encoding="utf-8"))
+def prepare_generation_configs(diff, cond, args):
+    """Apply the same runtime config injections as ``run.py``."""
+    diff = copy.deepcopy(diff)
+    cond = copy.deepcopy(cond)
     diff["device"] = args.device
     diff.setdefault("generator_pretrain_path", "")
     cond["device"] = args.device
     cond["cond_modal"] = args.cond_modal
     cond["text"]["device"] = args.device
+    cond["text"]["output_type"] = args.text_output_type
+    cond["text"]["pos_emb"] = args.text_pos_emb
     if args.base_patch is not None:
         diff["diffusion"]["base_patch"] = args.base_patch
     if args.multipatch_num is not None:
@@ -132,6 +131,18 @@ def _load_generation_stack(args):
         diff["diffusion"]["L_patch_len"] = args.patch_length
     if args.diff_stage_num is not None:
         cond["text"]["num_stages"] = args.diff_stage_num
+    return diff, cond
+
+
+def _load_generation_stack(args):
+    import torch
+    import yaml
+
+    from models.conditional_generator import ConditionalGenerator
+
+    raw_diff = yaml.safe_load(Path(args.diff_config).read_text(encoding="utf-8"))
+    raw_cond = yaml.safe_load(Path(args.cond_config).read_text(encoding="utf-8"))
+    diff, cond = prepare_generation_configs(raw_diff, raw_cond, args)
     model = ConditionalGenerator(diff, cond)
     state = torch.load(args.verbalts_checkpoint, map_location=args.device)
     model.load_state_dict(state, strict=True)
@@ -453,6 +464,8 @@ def build_argument_parser():
     parser.add_argument("--embedding-device", default="auto")
     parser.add_argument("--embedding-batch-size", type=int, default=64)
     parser.add_argument("--cond-modal", default="simple_text")
+    parser.add_argument("--text-output-type", default="all")
+    parser.add_argument("--text-pos-emb", default="none")
     parser.add_argument("--base-patch", type=int)
     parser.add_argument("--multipatch-num", type=int)
     parser.add_argument("--patch-length", type=int)
