@@ -19,6 +19,7 @@ EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-4}"
 EVAL_MAX_BATCHES="${EVAL_MAX_BATCHES:-1}"
 SEED="${SEED:-42}"
 COPY_THRESHOLD="${COPY_THRESHOLD:-0.05}"
+FORCE_RETRAIN="${FORCE_RETRAIN:-0}"
 
 for required_file in "${TEACHER_NPZ}" "${TEACHER_MANIFEST}" "${FIXED_SWEEP}"; do
   if [[ ! -f "${required_file}" ]]; then
@@ -47,15 +48,24 @@ print("teacher validation: PASS")
 PY
 
 echo "[2/6] Train score_only and score_plus_pair"
-TEACHER_NPZ="${TEACHER_NPZ}" \
-OUTPUT_ROOT="${CONTROLLER_ROOT}" \
-LOG_DIR="${LOG_DIR}" \
-DEVICE="${DEVICE}" \
-EPOCHS="${EPOCHS}" \
-PATIENCE="${PATIENCE}" \
-BATCH_SIZE="${BATCH_SIZE}" \
-SEED="${SEED}" \
-bash scripts/synth-m/train_adaptive_pilot_both.sh
+score_only_checkpoint="${CONTROLLER_ROOT}/pilot_score_only/best.pt"
+score_plus_pair_checkpoint="${CONTROLLER_ROOT}/pilot_score_plus_pair/best.pt"
+if [[ "${FORCE_RETRAIN}" != "1" \
+      && -s "${score_only_checkpoint}" \
+      && -s "${score_plus_pair_checkpoint}" ]]; then
+  echo "Reusing existing pilot controller checkpoints."
+  echo "Set FORCE_RETRAIN=1 to train them again."
+else
+  TEACHER_NPZ="${TEACHER_NPZ}" \
+  OUTPUT_ROOT="${CONTROLLER_ROOT}" \
+  LOG_DIR="${LOG_DIR}" \
+  DEVICE="${DEVICE}" \
+  EPOCHS="${EPOCHS}" \
+  PATIENCE="${PATIENCE}" \
+  BATCH_SIZE="${BATCH_SIZE}" \
+  SEED="${SEED}" \
+  bash scripts/synth-m/train_adaptive_pilot_both.sh
+fi
 
 run_evaluation() {
   local feature_mode="$1"
