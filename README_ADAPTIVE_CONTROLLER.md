@@ -256,6 +256,14 @@ python tests/run_numpy_retrieval_tests.py
 python tests/run_adaptive_numpy_tests.py
 ```
 
+已有 Synth-M pilot teacher 后，可用一条命令依次训练两种控制器、完成各自的单 batch adaptive evaluation，并生成分析输出：
+
+```bash
+bash scripts/synth-m/run_adaptive_pilot_end_to_end.sh
+```
+
+该总控脚本不会启动 full teacher build。可通过环境变量覆盖 pilot 设置，例如 `DEVICE=cuda:1 EPOCHS=30 bash scripts/synth-m/run_adaptive_pilot_end_to_end.sh`。
+
 完整 CPU smoke（需要 PyTorch，但不加载真实 LongCLIP/checkpoint/GPU）：
 
 ```bash
