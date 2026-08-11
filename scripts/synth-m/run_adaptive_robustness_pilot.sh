@@ -67,7 +67,7 @@ train_one() {
     --lambda-residual 0.0 \
     --direct-strength-head \
     --separate-task-towers \
-    "${extra_args[@]}" \
+    ${extra_args[@]+"${extra_args[@]}"} \
     2>&1 | tee "${log_path}"
 }
 
