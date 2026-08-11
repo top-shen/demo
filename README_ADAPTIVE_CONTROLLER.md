@@ -307,6 +307,18 @@ DEVICE=cpu bash scripts/synth-m/run_adaptive_decoupled_pilot.sh
 并比较原始 `max_residual=0.15`、较宽 residual 以及 direct strength head；这些都是
 controller-validation 消融，不会自动替代正式方法定义。
 
+若独立塔出现同时超过 constant strength/start-step 基线且 gate 有区分力的候选，
+先用三初始化 seed 与 shuffled-feature 负对照检查稳定性：
+
+```bash
+DEVICE=cpu bash scripts/synth-m/run_adaptive_robustness_pilot.sh
+```
+
+默认对同一 train-only Teacher 使用 seeds 42/43/44，并为每个 seed 训练真实特征和
+完全打乱 retrieval features 的成对负对照。只有真实特征多数 seed 稳定优于常数、
+且 gate 指标整体优于 shuffled control，才继续扩大 Teacher；该检查不读取 dataset
+valid/test。
+
 完整 CPU smoke（需要 PyTorch，但不加载真实 LongCLIP/checkpoint/GPU）：
 
 ```bash
