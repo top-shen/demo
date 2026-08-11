@@ -18,7 +18,6 @@ LAMBDA_GATE="${LAMBDA_GATE:-5.0}"
 COPY_QUANTILE="${COPY_QUANTILE:-0.05}"
 COPY_PAIRS="${COPY_PAIRS:-8192}"
 EPSILON_RELATIVE_ORIGINAL="${EPSILON_RELATIVE_ORIGINAL:-0.01}"
-ALLOW_STABLE_BUILD="${ALLOW_STABLE_BUILD:-0}"
 FORCE_TEACHER_BUILD="${FORCE_TEACHER_BUILD:-0}"
 FORCE_RETRAIN="${FORCE_RETRAIN:-0}"
 
@@ -38,11 +37,6 @@ mkdir -p "${TEACHER_ROOT}" "${OUTPUT_ROOT}" "${ANALYSIS_ROOT}" "${LOG_DIR}"
 if [[ "${FORCE_TEACHER_BUILD}" == "1" \
       || ! -s "${RAW_TEACHER}" \
       || ! -s "${RAW_MANIFEST}" ]]; then
-  if [[ "${ALLOW_STABLE_BUILD}" != "1" ]]; then
-    echo "This build creates ${MAX_QUERIES} x ${SAMPLES_PER_ACTION} train-only Teacher samples." >&2
-    echo "Re-run with ALLOW_STABLE_BUILD=1 after checking GPU availability." >&2
-    exit 2
-  fi
   echo "[1/6] Build/resume stable Teacher candidates"
   echo "Expected diffusion trajectories: $((MAX_QUERIES * 7 * SAMPLES_PER_ACTION))"
   bash scripts/synth-m/build_adaptive_teacher_pilot.sh \

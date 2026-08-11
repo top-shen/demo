@@ -322,8 +322,7 @@ valid/test。
 上述鲁棒性 pilot 完成后，可执行最终的 1024-query × 3 samples/action 稳定性检查：
 
 ```bash
-ALLOW_STABLE_BUILD=1 GENERATION_DEVICE=cuda:0 \
-  bash scripts/synth-m/run_adaptive_stable_teacher_go_no_go.sh
+bash scripts/synth-m/run_adaptive_stable_teacher_go_no_go.sh
 ```
 
 该命令只使用 Synth-M 训练集，构建 1024 个 query 的可恢复 Teacher。默认候选包含
@@ -342,8 +341,8 @@ gate AUROC 作为独立诊断字段报告，不与 adaptive-strength 的可学�
 这是 train-only 的方法可学习性检查，不是 dataset validation/test 结论，也不会自动
 启动正式评估。
 
-若 GPU 不在 0 号卡，可设置 `GENERATION_DEVICE=cuda:1`。若原始 Teacher 已完整生成，
-后续重跑不再要求 `ALLOW_STABLE_BUILD=1`；训练 checkpoint 也默认复用。需要重新进入
+脚本默认直接开始构建，不要求额外确认变量。若 GPU 不在 0 号卡，可设置
+`GENERATION_DEVICE=cuda:1`。原始 Teacher 和训练 checkpoint 默认复用；需要重新进入
 Teacher 的 resume/recombine 流程或重训时，分别设置 `FORCE_TEACHER_BUILD=1` 或
 `FORCE_RETRAIN=1`。若有意覆盖 q05/1% 阈值，必须同步设置新的 `LABEL_TAG`，避免不同
 研究定义共用输出目录。
