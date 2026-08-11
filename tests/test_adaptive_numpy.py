@@ -27,6 +27,7 @@ from retrieval.strength_teacher import (
 from tools.build_strength_teacher import _standardize_single_ts, prepare_generation_configs
 from tools.compare_strength_controllers import best_balanced_gate_threshold
 from tools.relabel_strength_teacher import relabel_payload
+from tools.summarize_adaptive_go_no_go import summarize_rows
 
 
 def test_score_features_and_entropy():
@@ -146,6 +147,61 @@ def test_balanced_gate_threshold_calibration():
     assert result["gate_balanced_accuracy"] == 1.0
     assert result["gate_tp"] == 2
     assert result["gate_tn"] == 2
+
+
+def test_stable_teacher_go_no_go_requires_pair_signal_and_controls():
+    rows = []
+    for seed in (42, 43, 44):
+        common = {
+            "constant_strength_mae": 0.10,
+            "constant_start_step_mae": 5.0,
+            "gate_balanced_accuracy": 0.70,
+        }
+        rows.extend(
+            [
+                {
+                    **common,
+                    "name": f"pair_direct_seed{seed}",
+                    "learned_strength_mae": 0.08,
+                    "start_step_mae": 4.0,
+                    "gate_auroc": 0.75,
+                    "beats_constant": True,
+                    "beats_constant_start_step": True,
+                },
+                {
+                    **common,
+                    "name": f"score_only_direct_seed{seed}",
+                    "learned_strength_mae": 0.09,
+                    "start_step_mae": 4.5,
+                    "gate_auroc": 0.65,
+                    "beats_constant": True,
+                    "beats_constant_start_step": True,
+                },
+                {
+                    **common,
+                    "name": f"pair_direct_shuffled_seed{seed}",
+                    "learned_strength_mae": 0.11,
+                    "start_step_mae": 5.2,
+                    "gate_auroc": 0.50,
+                    "beats_constant": False,
+                    "beats_constant_start_step": False,
+                },
+            ]
+        )
+    summary = summarize_rows(rows)
+    assert summary["decision"] == "GO"
+    assert summary["gate_signal"] == "SUPPORTED"
+    for row in rows:
+        if row["name"].startswith("pair_direct_seed"):
+            row["gate_auroc"] = 0.50
+    summary = summarize_rows(rows)
+    assert summary["decision"] == "GO"
+    assert summary["gate_signal"] == "NOT_SUPPORTED"
+    for row in rows:
+        if row["name"].startswith("pair_direct_seed"):
+            row["learned_strength_mae"] = 0.11
+            row["beats_constant"] = False
+    assert summarize_rows(rows)["decision"] == "NO_GO"
 
 
 def test_dimension_normalized_rmse():

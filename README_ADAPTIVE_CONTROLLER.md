@@ -319,6 +319,35 @@ DEVICE=cpu bash scripts/synth-m/run_adaptive_robustness_pilot.sh
 且 gate 指标整体优于 shuffled control，才继续扩大 Teacher；该检查不读取 dataset
 valid/test。
 
+上述鲁棒性 pilot 完成后，可执行最终的 1024-query × 3 samples/action 稳定性检查：
+
+```bash
+ALLOW_STABLE_BUILD=1 GENERATION_DEVICE=cuda:0 \
+  bash scripts/synth-m/run_adaptive_stable_teacher_go_no_go.sh
+```
+
+该命令只使用 Synth-M 训练集，构建 1024 个 query 的可恢复 Teacher。默认候选包含
+6 个 strength 与 Original，因此总计生成 21,504 条 diffusion trajectory；中断后
+重新运行同一命令会按 query 续建。原始候选和使用训练集随机不同序列对 q05 copy
+阈值、Original CTTP 均值 1% semantic margin 重标后的 Teacher 分开保存，不覆盖
+已有 256-query 结果。
+
+脚本随后使用 seeds 42/43/44 训练 `score_plus_pair`、`score_only` 和 shuffled-pair
+三组 direct-head 独立 task tower，并输出
+`save/adaptive_pilot_analysis/synth-m/stable_q1024_spa3_seed42_q05_eps1pct/go_no_go.json`。
+只有 pair 模型的 strength/start-step 误差在多数 seed 和跨 seed 均值上超过
+controller-train constant，且 strength 相对 shuffled control 的优势也同时满足多数
+seed 与均值条件时，才报告 `GO`；否则报告 `NO_GO`。pair 相对 score-only 的增益和
+gate AUROC 作为独立诊断字段报告，不与 adaptive-strength 的可学习性判定混为一谈。
+这是 train-only 的方法可学习性检查，不是 dataset validation/test 结论，也不会自动
+启动正式评估。
+
+若 GPU 不在 0 号卡，可设置 `GENERATION_DEVICE=cuda:1`。若原始 Teacher 已完整生成，
+后续重跑不再要求 `ALLOW_STABLE_BUILD=1`；训练 checkpoint 也默认复用。需要重新进入
+Teacher 的 resume/recombine 流程或重训时，分别设置 `FORCE_TEACHER_BUILD=1` 或
+`FORCE_RETRAIN=1`。若有意覆盖 q05/1% 阈值，必须同步设置新的 `LABEL_TAG`，避免不同
+研究定义共用输出目录。
+
 完整 CPU smoke（需要 PyTorch，但不加载真实 LongCLIP/checkpoint/GPU）：
 
 ```bash
