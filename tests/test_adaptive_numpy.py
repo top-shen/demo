@@ -28,6 +28,7 @@ from tools.build_strength_teacher import _standardize_single_ts, prepare_generat
 from tools.compare_strength_controllers import best_balanced_gate_threshold
 from tools.relabel_strength_teacher import relabel_payload
 from tools.summarize_adaptive_go_no_go import summarize_rows
+from tools.summarize_adaptive_validation import summarize as summarize_validation
 
 
 def test_score_features_and_entropy():
@@ -202,6 +203,47 @@ def test_stable_teacher_go_no_go_requires_pair_signal_and_controls():
             row["learned_strength_mae"] = 0.11
             row["beats_constant"] = False
     assert summarize_rows(rows)["decision"] == "NO_GO"
+
+
+def test_validation_selection_rule_and_decision_are_locked():
+    def condition(cttp, fid, jftsd, copy_rate=None, strength=None):
+        rows = [
+            {"run": run, "cttp": cttp, "fid": fid, "jftsd": jftsd}
+            for run in range(3)
+        ]
+        result = {
+            "runs": [0, 1, 2],
+            "cttp_mean": cttp,
+            "cttp_std": 0.0,
+            "fid_mean": fid,
+            "fid_std": 0.0,
+            "jftsd_mean": jftsd,
+            "jftsd_std": 0.0,
+            "per_run": rows,
+        }
+        if copy_rate is not None:
+            result["copy_rate"] = copy_rate
+        if strength is not None:
+            result["strength"] = strength
+        return result
+
+    conditions = {
+        "original": condition(100.0, 10.0, 10.0),
+        "retrieval_only": condition(80.0, 12.0, 12.0, copy_rate=1.0),
+        "fixed_020": condition(98.0, 7.0, 5.0, copy_rate=0.8, strength=0.2),
+        "fixed_040": condition(100.0, 8.5, 6.0, copy_rate=0.5, strength=0.4),
+        "handcrafted": condition(100.0, 8.2, 7.0, copy_rate=0.4),
+        "learned_pair": condition(100.0, 8.0, 5.0, copy_rate=0.2),
+        "learned_score_only": condition(100.0, 8.1, 6.5, copy_rate=0.3),
+        "shuffled_pair": condition(100.0, 8.3, 6.7, copy_rate=0.3),
+    }
+    summary = summarize_validation(conditions, cttp_margin=0.01, copy_threshold=0.7)
+    assert summary["best_fixed_condition"] == "fixed_040"
+    assert summary["decision"] == "GO_TO_TEST"
+    conditions["learned_pair"] = condition(100.0, 8.0, 7.5, copy_rate=0.2)
+    summary = summarize_validation(conditions, cttp_margin=0.01, copy_threshold=0.7)
+    assert summary["decision"] == "STOP_OR_REVISE"
+    assert "jftsd_better_than_best_fixed" in summary["failed_criteria"]
 
 
 def test_dimension_normalized_rmse():

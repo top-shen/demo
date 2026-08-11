@@ -171,6 +171,9 @@ class BaseEvaluator:
         self.display_epoch_interval = self.configs["display_interval"]
         self.model_path = self.configs["model_path"]
         self.max_batches = int(self.configs.get("max_batches", -1))
+        self.eval_split = str(self.configs.get("split", "test"))
+        if self.eval_split not in {"valid", "test"}:
+            raise ValueError("Evaluation split must be 'valid' or 'test'; train is forbidden")
         self.rag_configs = dict(self.configs.get("rag", {}))
 
     def _init_model(self, model):
@@ -181,7 +184,12 @@ class BaseEvaluator:
 
     def _init_data(self, dataset):
         self.dataset = dataset
-        self.test_loader = dataset.get_loader(split="test", batch_size=self.batch_size, shuffle=False, include_self=False)
+        self.eval_loader = dataset.get_loader(
+            split=self.eval_split,
+            batch_size=self.batch_size,
+            shuffle=False,
+            include_self=False,
+        )
 
     """
     Evaluate.
@@ -222,7 +230,7 @@ class BaseEvaluator:
         save_pred = bool(save_pred or self.configs.get("save_predictions", False) or diverse_reference)
 
         with torch.no_grad():
-            for batch_no, batch in enumerate(self.test_loader):
+            for batch_no, batch in enumerate(self.eval_loader):
                 if self.max_batches > 0 and batch_no >= self.max_batches:
                     break
                 start_time = time.time()
@@ -426,11 +434,13 @@ class BaseEvaluator:
             return
         os.makedirs(os.path.dirname(prediction_path) or ".", exist_ok=True)
         # Each batch has [S,B,L,V]; concatenate along B to preserve candidates.
+        evaluation_sample_ids = np.concatenate(sample_ids, axis=0)
         payload = {
             "candidates": np.concatenate(candidates, axis=1),
             "predictions": np.concatenate(predictions, axis=0),
             "targets": np.concatenate(targets, axis=0),
-            "test_sample_ids": np.concatenate(sample_ids, axis=0),
+            "evaluation_sample_ids": evaluation_sample_ids,
+            "evaluation_split": np.asarray(self.eval_split),
             "query_caption_ids": np.concatenate(caption_ids, axis=0),
             "query_captions": np.asarray(captions),
             "per_sample_cttp": np.concatenate(per_sample_cttp, axis=0),
@@ -444,6 +454,12 @@ class BaseEvaluator:
             "controller_actions": np.asarray(controller_actions),
             "fallback_reasons": np.asarray(fallback_reasons),
         }
+        # Preserve the phase-1 test artifact field while avoiding a misleading
+        # test label for controller-selection runs on the validation split.
+        if self.eval_split == "test":
+            payload["test_sample_ids"] = evaluation_sample_ids
+        else:
+            payload["validation_sample_ids"] = evaluation_sample_ids
         if reference_ids:
             payload["reference_sample_ids"] = np.concatenate(reference_ids, axis=1)
         np.savez(prediction_path, **payload)

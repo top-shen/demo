@@ -347,6 +347,38 @@ Teacher 的 resume/recombine 流程或重训时，分别设置 `FORCE_TEACHER_BU
 `FORCE_RETRAIN=1`。若有意覆盖 q05/1% 阈值，必须同步设置新的 `LABEL_TAG`，避免不同
 研究定义共用输出目录。
 
+若稳定 Teacher 输出 `decision=GO` 但 `gate_signal=NOT_SUPPORTED`，下一阶段只验证
+关闭 gate 的 adaptive strength，不允许 gate 拒绝样本影响主结果。运行完整的
+Synth-M dataset-validation benchmark：
+
+```bash
+bash scripts/synth-m/run_adaptive_validation.sh
+```
+
+该脚本显式传递 `--eval_split valid`，并在汇总前逐个检查保存的 `eval_configs.yaml`
+和 prediction split；任何 `test` artifact 或 `max_batches>0` 的 partial pilot 都会被
+拒绝。现有配置仍默认 `split: test`，所以旧的正式评估行为保持兼容，但不得用旧
+`eval_adaptive.sh` 默认值做参数选择。
+
+validation 条件包括 Original、Retrieval-only、fixed
+`0.20/0.35/0.40/0.50/0.65/0.80/0.95`、handcrafted similarity prior、learned
+score-plus-pair、learned score-only 和 shuffled-pair；每组默认评估 VerbalTS runs
+0/1/2。稳定 Teacher 的 controller seed 42 在读取 validation 结果前固定为主 checkpoint，
+所有 adaptive 条件使用 `gate_threshold=0`。已完成条件通过 `results.csv` 自动复用。
+
+validation-best fixed strength 的规则在读取结果前锁定为：先要求平均 CTTP 不低于
+Original 的 99%，再选择平均 J-FTSD 最低者；若相同，依次使用更低 FID 和更高 CTTP
+作为 tie-breaker。最终输出：
+
+```text
+save/adaptive_validation/synth-m/stable_q1024_spa3/validation_decision.json
+save/adaptive_validation/synth-m/stable_q1024_spa3/validation_summary.csv
+```
+
+只有 `validation_decision.json` 报告 `GO_TO_TEST` 后才锁定 best-fixed strength、controller
+checkpoint/hash 和 gate-disabled 配置，并运行一次 test。`STOP_OR_REVISE` 不得通过查看
+test 结果补救。
+
 完整 CPU smoke（需要 PyTorch，但不加载真实 LongCLIP/checkpoint/GPU）：
 
 ```bash

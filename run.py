@@ -105,6 +105,7 @@ def _evaluate_cond_gen(evaluator, sampler="ddim", n_sample=10):
     )
 
     info = {
+        "split": evaluator.eval_split,
         "mode": "cond_gen", 
         "sampler": sampler,
         "n_samples": evaluator.n_samples,
@@ -159,6 +160,7 @@ parser.add_argument("--diff_stage_num", type=int, default=3)
 
 parser.add_argument("--batch_size", type=int, default=128)
 parser.add_argument("--eval_max_batches", type=int, default=None)
+parser.add_argument("--eval_split", choices=["valid", "test"], default=None)
 parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--epochs", type=int, default=200)
 
@@ -221,6 +223,8 @@ train_configs["train"]["batch_size"] = args.batch_size
 eval_configs["eval"]["batch_size"] = args.batch_size
 if args.eval_max_batches is not None:
     eval_configs["eval"]["max_batches"] = args.eval_max_batches
+if args.eval_split is not None:
+    eval_configs["eval"]["split"] = args.eval_split
 
 rag_defaults = {
     "enabled": False,
@@ -358,5 +362,7 @@ df = pd.concat(df_list, ignore_index=True)
 path = os.path.join(save_folder, "results.csv")
 df.to_csv(path)
 
-df_stat = df.groupby(["mode", "sampler", "steps", "n_samples"], as_index=False).agg(["mean", "std"])
+df_stat = df.groupby(
+    ["split", "mode", "sampler", "steps", "n_samples"], as_index=False
+).agg(["mean", "std"])
 df_stat.to_csv(os.path.join(save_folder, "results_stat_condgen.csv"))

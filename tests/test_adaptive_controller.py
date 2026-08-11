@@ -3,6 +3,7 @@ import json
 import numpy as np
 import torch
 
+from evaluation.base_evaluator import BaseEvaluator
 from models.conditional_generator import ConditionalGenerator
 from retrieval.adaptive_strength_controller import (
     CONTROLLER_VERSION,
@@ -15,6 +16,48 @@ from retrieval.adaptive_strength_controller import (
     save_controller_checkpoint,
 )
 from test_retrieval import make_generator
+
+
+def test_evaluator_uses_explicit_validation_split_and_rejects_train():
+    class FakeDataset:
+        def __init__(self):
+            self.requested_split = None
+
+        def get_loader(self, split, **kwargs):
+            self.requested_split = split
+            return [split]
+
+    evaluator = BaseEvaluator.__new__(BaseEvaluator)
+    evaluator._init_cfgs(
+        {
+            "batch_size": 2,
+            "n_samples": 1,
+            "display_interval": 1,
+            "model_path": "",
+            "split": "valid",
+        }
+    )
+    dataset = FakeDataset()
+    evaluator._init_data(dataset)
+    assert evaluator.eval_split == "valid"
+    assert dataset.requested_split == "valid"
+    assert evaluator.eval_loader == ["valid"]
+
+    invalid = BaseEvaluator.__new__(BaseEvaluator)
+    try:
+        invalid._init_cfgs(
+            {
+                "batch_size": 2,
+                "n_samples": 1,
+                "display_interval": 1,
+                "model_path": "",
+                "split": "train",
+            }
+        )
+    except ValueError as error:
+        assert "train is forbidden" in str(error)
+    else:
+        raise AssertionError("Evaluator accepted the training split")
 
 
 def make_controller(feature_mode="score_only"):
