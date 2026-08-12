@@ -6,43 +6,9 @@ from models.cttp.cttp_model import CTTP
 import yaml
 import tqdm
 import numpy as np
-from scipy import linalg
 import random
 import json
-
-def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
-
-    mu1 = np.atleast_1d(mu1)
-    mu2 = np.atleast_1d(mu2)
-
-    sigma1 = np.atleast_2d(sigma1)
-    sigma2 = np.atleast_2d(sigma2)
-
-    assert (
-        mu1.shape == mu2.shape
-    ), "Training and test mean vectors have different lengths"
-    assert (
-        sigma1.shape == sigma2.shape
-    ), "Training and test covariances have different dimensions"
-
-    diff = mu1 - mu2
-
-    covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
-    if not np.isfinite(covmean).all():
-        msg = (
-            "fid calculation produces singular product; "
-            "adding %s to diagonal of cov estimates"
-        ) % eps
-        print(msg)
-        offset = np.eye(sigma1.shape[0]) * eps
-        covmean = linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset))
-
-    if np.iscomplexobj(covmean):
-        covmean = covmean.real
-
-    tr_covmean = np.trace(covmean)
-
-    return diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean
+from evaluation.oracle_metrics import calculate_frechet_distance
 
 class BaseEvaluator:
     def __init__(self, configs, dataset, model):

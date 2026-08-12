@@ -385,3 +385,49 @@ test 结果补救。
 python tests/run_rag_smoke_tests.py
 # 或 python -m pytest tests/test_retrieval.py tests/test_adaptive_controller.py -q
 ```
+
+## 9. Validation-only Oracle ceiling 诊断
+
+dataset validation 表明 learned controller 没有超过 validation-best fixed strength 后，可运行一个严格的、仅用于诊断的 policy-specific empirical ceiling。它回答的是：在已经保存的 fixed-strength action grid 内，如果事后知道每个 validation 样本该选哪个 strength，当前 action space 是否仍有可用 headroom。它不是数学意义上的全局上界，也不是可部署模型；Oracle 使用了 validation label/metric，不能替代 controller，更不能据此自动查看 test。
+
+Oracle 只读取每个 fixed condition 已保存的最终 `predictions`，即 10 个随机候选的逐点中位数。`candidates` 字段被明确忽略，禁止在 10 个随机候选内部再次选择，否则会额外利用采样结果并严重夸大 ceiling。每个 run 只在同一 run 的 fixed actions 内选择，run 0/1/2 绝不交叉混合。
+
+运行前会 fail-fast 审计：
+
+- split 必须为 `valid`，`max_batches <= 0`，sample ID 完整且无重复；
+- 不同 strength 按 sample ID 对齐，并核对 caption ID、caption、target 和 reference ID；
+- 目录 strength 与保存配置一致，CTTP checkpoint/config/training statistics 身份一致；
+- 保存的逐样本 CTTP 均值能够复现 results.csv，离线重算路径能够复现每个 fixed action 的 CTTP/FID/J-FTSD；
+- 所有输入路径、配置摘要和 SHA-256 写入 manifest，结束时再次核对输入未被修改。
+
+默认 action grid 从真实目录和 `eval_configs.yaml` 联合发现，不硬编码。四类 policy 为：
+
+1. `max_cttp`：逐样本选择 CTTP 最大的 fixed action；CTTP 容差内依次偏好非 near-reference、更大 reference distance、更高 strength、固定 action index。
+2. `non_reference_max_cttp_qXX`：只在 `distance >= threshold` 的 action 中最大化 CTTP；无可行 action 时，若已有 Original prediction 则退回 Original，否则选择 reference distance 最大的 fixed action，并保留 `constraint_unmet=true`。
+3. `pareto_*_lambda_*`：逐样本归一化 CTTP 和 strength，最大化 `normalized_cttp - lambda * normalized_strength`。同时报告 unconstrained 与 q05 non-reference constrained family，lambda 固定为 `0,0.02,0.05,0.10,0.20,0.50,1,2,5`。报告三 run 共用 lambda，以及每个 run 独立挑 lambda 的更乐观 ceiling；主要判断只参考 shared-lambda。
+4. `original_hybrid`：仅在 Original 的逐样本 prediction 已经保存时可用。若某个 fixed action 同时满足 `CTTP >= 0.99 * Original per-sample CTTP` 和 non-reference constraint，则选择最低 strength，否则回退 Original。若 Original predictions 缺失，标记 `hybrid_oracle_available=false`，绝不补跑生成。
+
+near-reference 使用 generated-to-reference 的维度归一化 RMSE，`distance < threshold` 即标记 near-reference。默认 q05 必须来自 train-only Teacher manifest/calibration；当前 Synth-M 估计约为 `0.6874167`。若 train-only 文件还保存 q01/q10，则同时输出敏感性分析；缺少时明确标记 unavailable。该指标只是 reference-retention 风险启发式，不等同于已证明的抄袭或 exact copy。
+
+Oracle 挑选完成后会形成完整的新 prediction embedding 集合，并在这个重组后的集合上重算 CTTP、FID 和 J-FTSD。FID/J-FTSD 是集合级指标，绝不能对各 fixed action 已有的 aggregate 数字做加权平均。max-CTTP 和 Pareto 都直接使用 CTTP 做事后选择，因此结果存在明确的 metric-targeting/乐观偏差。
+
+运行命令：
+
+```bash
+bash scripts/synth-m/run_oracle_ceiling.sh
+```
+
+这条命令不会调用 `run.py`、diffusion generation、Teacher/controller 训练或 test。可覆盖离线编码设备，例如 `DEVICE=cpu bash scripts/synth-m/run_oracle_ceiling.sh`。只有在 reference 本身随 strength 改变、且明确希望诊断 reference+strength 联合上限时，才设置 `ALLOW_JOINT_REFERENCE_ORACLE=1`；报告会据此标为 joint oracle，不能冒充 strength-only 结果。
+
+输出位于 `save/adaptive_validation/synth-m/stable_q1024_spa3/oracle_ceiling/`：manifest、integrity report、每 run/汇总 metrics、decision、strength usage、Pareto frontier、near-reference sensitivity，以及每个 run 的 CSV/NPZ assignments。研究分类只能是：
+
+- `USABLE_HEADROOM_PRESENT`：non-reference Pareto 或 hybrid 同时满足 CTTP 为 Original 的至少 99%、FID/J-FTSD 优于 Original、J-FTSD 优于 best-fixed、near-reference 不超过 cap，且至少 2/3 run 方向一致；说明瓶颈更可能在 Teacher/features/controller。
+- `METRIC_TARGETED_OR_COPY_HEADROOM_ONLY`：只有 max-CTTP/unconstrained 等乐观策略改善，安全 non-reference/hybrid 不成立；不能据此支持部署。
+- `NO_USABLE_HEADROOM_IN_EVALUATED_GRID`：在当前 fixed grid、reference 和 validation Oracle policies 下未观察到可用 headroom；不能外推为任何 adaptive strength 都不可能有效。
+- `INCONCLUSIVE_ARTIFACTS_MISSING`：必要 prediction/config/threshold/alignment 或离线复现审计不成立。
+
+无论分类为何，test 都保持未读取、未运行。依赖无关的 Oracle 单元测试命令为：
+
+```bash
+python tests/run_oracle_ceiling_tests.py
+```
