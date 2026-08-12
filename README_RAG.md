@@ -149,6 +149,9 @@ Together with the index's `train_ts` and trace mappings, these arrays support:
 - pairwise candidate diversity;
 - retrieval score distributions and reference usage frequencies.
 
+The implemented post-hoc protocol and one-command visualization scripts are
+documented in [README_REFERENCE_DEPENDENCE.md](README_REFERENCE_DEPENDENCE.md).
+
 Distance/copy thresholds and normalization conventions are intentionally left
 to the analysis protocol in phase 1; raw candidates and stable IDs are retained
 so those definitions can be changed without rerunning diffusion.

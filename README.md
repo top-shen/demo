@@ -61,6 +61,9 @@ and known paper/code differences, see [REPRODUCTION.md](REPRODUCTION.md).
 For train-only retrieval-initialized inference, index construction, ablations,
 and retrieval trace outputs, see [README_RAG.md](README_RAG.md).
 
+For post-hoc case visualization and quantitative reference-dependence
+diagnostics, see [README_REFERENCE_DEPENDENCE.md](README_REFERENCE_DEPENDENCE.md).
+
 For the train-only teacher pipeline and learnable per-sample retrieval-adaptive
 strength/gate controller, see [README_ADAPTIVE_CONTROLLER.md](README_ADAPTIVE_CONTROLLER.md).
 ### 2. Dataset
