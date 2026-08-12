@@ -352,6 +352,41 @@ def discover_thresholds(manifest, calibration=None):
     return discovered
 
 
+def symmetric_relative_difference(left, right, epsilon=1e-12):
+    left = float(left)
+    right = float(right)
+    return abs(left - right) / max(abs(left), abs(right), float(epsilon))
+
+
+def audit_metric_reproduction(
+    recomputed,
+    recorded,
+    runtime_mode,
+    absolute_tolerance=1e-3,
+    stochastic_relative_tolerance=0.05,
+):
+    """Audit deterministic metrics exactly and legacy-dropout metrics statistically."""
+    difference = float(recomputed) - float(recorded)
+    relative_difference = symmetric_relative_difference(recomputed, recorded)
+    if runtime_mode == "eval":
+        passed = abs(difference) <= float(absolute_tolerance)
+        criterion = f"absolute_difference<={float(absolute_tolerance):g}"
+    elif runtime_mode == "legacy_train":
+        passed = relative_difference <= float(stochastic_relative_tolerance)
+        criterion = (
+            "symmetric_relative_difference<="
+            f"{float(stochastic_relative_tolerance):g}"
+        )
+    else:
+        raise ValueError(f"Unknown CTTP runtime mode: {runtime_mode}")
+    return {
+        "difference": difference,
+        "relative_difference": relative_difference,
+        "passed": bool(passed),
+        "criterion": criterion,
+    }
+
+
 def _load_yaml(path):
     import yaml
 
@@ -682,7 +717,7 @@ def _load_training_statistics(identity):
     return values, files
 
 
-def _load_cttp(identity, device):
+def _load_cttp(identity, device, runtime_mode):
     import torch
     import yaml
 
@@ -699,13 +734,45 @@ def _load_cttp(identity, device):
     model = CTTP(config)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model = model.to(device)
-    model.eval()
     model.requires_grad_(False)
+    if runtime_mode == "legacy_train":
+        # The validation artifacts were produced by BaseEvaluator before it
+        # called clip.eval(). Preserve that scorer distribution (including
+        # dropout), while keeping every parameter frozen.
+        model.train()
+    elif runtime_mode == "eval":
+        model.eval()
+    else:
+        raise ValueError(f"Unknown CTTP runtime mode: {runtime_mode}")
     files = [
         {"role": "cttp_config", "path": str(config_path), "sha256": sha256_file(config_path)},
         {"role": "cttp_checkpoint", "path": str(checkpoint_path), "sha256": sha256_file(checkpoint_path)},
     ]
-    return model, files
+    runtime = {
+        "mode": runtime_mode,
+        "parameters_frozen": True,
+        "ts_dropout": float(config.get("ts", {}).get("dropout", 0.0)),
+        "stochastic": runtime_mode == "legacy_train"
+        and float(config.get("ts", {}).get("dropout", 0.0)) > 0,
+        "reason": (
+            "Historical BaseEvaluator left CTTP in train mode; Monte Carlo repeats "
+            "estimate the legacy scorer distribution."
+            if runtime_mode == "legacy_train"
+            else "Deterministic CTTP eval mode."
+        ),
+    }
+    return model, files, runtime
+
+
+def _seed_scorer(seed):
+    import random
+    import torch
+
+    random.seed(int(seed))
+    np.random.seed(int(seed))
+    torch.manual_seed(int(seed))
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(int(seed))
 
 
 def _encode_text(model, captions, batch_size):
@@ -754,10 +821,34 @@ def _metric_row(
     original_ts_embeddings=None,
     original_scores=None,
 ):
-    selected_ts = compose_selected(
-        ts_embedding_matrix, selected, original=original_ts_embeddings
-    )
-    metrics = metrics_from_embeddings(selected_ts, text_embeddings, **statistics)
+    ts_embedding_matrix = np.asarray(ts_embedding_matrix)
+    text_embeddings = np.asarray(text_embeddings)
+    if ts_embedding_matrix.ndim != 4 or text_embeddings.ndim != 3:
+        raise ValueError("Repeated embeddings must have [R,A,N,D] and [R,N,D] shape")
+    if ts_embedding_matrix.shape[0] != text_embeddings.shape[0]:
+        raise ValueError("Time-series/text scorer repeat counts differ")
+    repeat_metrics = []
+    for repeat in range(ts_embedding_matrix.shape[0]):
+        original_repeat = (
+            None
+            if original_ts_embeddings is None
+            else np.asarray(original_ts_embeddings)[repeat]
+        )
+        selected_ts = compose_selected(
+            ts_embedding_matrix[repeat], selected, original=original_repeat
+        )
+        repeat_metrics.append(
+            metrics_from_embeddings(
+                selected_ts, text_embeddings[repeat], **statistics
+            )
+        )
+    metrics = {}
+    for metric in ("cttp", "fid", "jftsd"):
+        values = np.asarray([row[metric] for row in repeat_metrics], dtype=np.float64)
+        metrics[metric] = float(values.mean())
+        metrics[f"{metric}_scorer_repeat_std"] = (
+            float(values.std(ddof=1)) if values.size > 1 else 0.0
+        )
     rows = np.arange(selected.size)
     fixed = selected >= 0
     selected_scores = np.empty(selected.size, dtype=np.float32)
@@ -778,6 +869,7 @@ def _metric_row(
         "policy": policy,
         "threshold_label": threshold_label,
         "threshold": float(threshold),
+        "scorer_repeats": int(ts_embedding_matrix.shape[0]),
         **metrics,
         "near_reference_rate": float(near.mean()),
         "mean_strength": float(np.nanmean(selected_strengths)) if fixed.any() else None,
@@ -813,6 +905,9 @@ def _summaries(metric_rows):
             "cttp_delta_best_fixed",
             "fid_delta_best_fixed",
             "jftsd_delta_best_fixed",
+            "cttp_scorer_repeat_std",
+            "fid_scorer_repeat_std",
+            "jftsd_scorer_repeat_std",
         ):
             values = np.asarray(
                 [row[metric] for row in rows if row[metric] is not None], dtype=float
@@ -928,7 +1023,21 @@ def _run_analysis(args):
     best_fixed_results = fixed["results"][best_fixed_name]
 
     statistics, statistic_files = _load_training_statistics(fixed["cttp_identity"])
-    model, model_files = _load_cttp(fixed["cttp_identity"], args.device)
+    model, model_files, scorer_runtime = _load_cttp(
+        fixed["cttp_identity"], args.device, args.cttp_runtime_mode
+    )
+    scorer_repeats = (
+        int(args.scorer_repeats)
+        if args.cttp_runtime_mode == "legacy_train"
+        else 1
+    )
+    if scorer_repeats < 1:
+        raise ValueError("--scorer-repeats must be positive")
+    print(
+        f"CTTP runtime={args.cttp_runtime_mode}, scorer_repeats={scorer_repeats}, "
+        f"frozen_parameters={scorer_runtime['parameters_frozen']}",
+        flush=True,
+    )
     input_files = fixed["files"] + original_files + statistic_files + model_files + [
         {
             "role": "teacher_manifest",
@@ -978,34 +1087,7 @@ def _run_analysis(args):
         captions = np.asarray(actions[names[0]]["query_captions"]).astype(str)
         caption_ids = np.asarray(actions[names[0]]["query_caption_ids"], dtype=np.int64)
         lengths = np.full(expected_count, sequence_length, dtype=np.int32)
-        text_embeddings = _encode_text(model, captions, args.embedding_batch_size)
-        ts_embeddings = np.stack(
-            [
-                _encode_ts(model, predictions[column], lengths, args.embedding_batch_size)
-                for column in range(len(names))
-            ],
-            axis=0,
-        )
-        for column, name in enumerate(names):
-            recomputed = metrics_from_embeddings(
-                ts_embeddings[column], text_embeddings, **statistics
-            )
-            expected = fixed["results"][name][run]
-            differences = {
-                metric: float(recomputed[metric] - expected[metric])
-                for metric in ("cttp", "fid", "jftsd")
-            }
-            reproduction_rows.append(
-                {"run": run, "action": name, **recomputed, **{f"delta_{k}": v for k, v in differences.items()}}
-            )
-            for metric, difference in differences.items():
-                if abs(difference) > args.metric_audit_atol:
-                    raise AuditError(
-                        f"Offline {metric} for {name}/run{run} differs by {difference}, "
-                        f"exceeding {args.metric_audit_atol}"
-                    )
-
-        original_ts_embeddings = None
+        original_predictions = None
         original_scores = None
         if original_payloads is not None:
             original = original_payloads[run]
@@ -1023,31 +1105,110 @@ def _run_analysis(args):
                 )
                 if not equal:
                     raise AuditError(f"Original differs from fixed actions in {field}")
-            original_ts_embeddings = _encode_ts(
-                model, original["predictions"], lengths, args.embedding_batch_size
-            )
+            original_predictions = original["predictions"]
             original_scores = np.asarray(original["per_sample_cttp"], dtype=np.float32)
-            recomputed_original = metrics_from_embeddings(
-                original_ts_embeddings, text_embeddings, **statistics
+
+        text_repeat_values = []
+        ts_repeat_values = []
+        original_repeat_values = []
+        for repeat in range(scorer_repeats):
+            scorer_seed = int(args.scorer_seed) + run * 10000 + repeat
+            print(
+                f"[run {run}] CTTP encoding repeat {repeat + 1}/{scorer_repeats} "
+                f"seed={scorer_seed}",
+                flush=True,
             )
-            original_differences = {
-                metric: float(recomputed_original[metric] - original_results[run][metric])
-                for metric in ("cttp", "fid", "jftsd")
-            }
-            reproduction_rows.append(
-                {
-                    "run": run,
-                    "action": "original",
-                    **recomputed_original,
-                    **{f"delta_{key}": value for key, value in original_differences.items()},
-                }
+            _seed_scorer(scorer_seed)
+            repeat_text = _encode_text(
+                model, captions, args.embedding_batch_size
             )
-            for metric, difference in original_differences.items():
-                if abs(difference) > args.metric_audit_atol:
-                    raise AuditError(
-                        f"Offline {metric} for original/run{run} differs by {difference}, "
-                        f"exceeding {args.metric_audit_atol}"
+            repeat_ts = np.stack(
+                [
+                    _encode_ts(
+                        model,
+                        predictions[column],
+                        lengths,
+                        args.embedding_batch_size,
                     )
+                    for column in range(len(names))
+                ],
+                axis=0,
+            )
+            text_repeat_values.append(repeat_text)
+            ts_repeat_values.append(repeat_ts)
+            if original_predictions is not None:
+                original_repeat_values.append(
+                    _encode_ts(
+                        model,
+                        original_predictions,
+                        lengths,
+                        args.embedding_batch_size,
+                    )
+                )
+        text_embeddings = np.stack(text_repeat_values, axis=0)
+        ts_embeddings = np.stack(ts_repeat_values, axis=0)
+        original_ts_embeddings = (
+            np.stack(original_repeat_values, axis=0)
+            if original_repeat_values
+            else None
+        )
+
+        def audit_action(action_name, embedding_repeats, expected_metrics):
+            repeat_rows = [
+                metrics_from_embeddings(
+                    embedding_repeats[repeat],
+                    text_embeddings[repeat],
+                    **statistics,
+                )
+                for repeat in range(scorer_repeats)
+            ]
+            record = {
+                "run": run,
+                "action": action_name,
+                "scorer_runtime_mode": args.cttp_runtime_mode,
+                "scorer_repeats": scorer_repeats,
+            }
+            failures = []
+            for metric in ("cttp", "fid", "jftsd"):
+                values = np.asarray(
+                    [row[metric] for row in repeat_rows], dtype=np.float64
+                )
+                recomputed = float(values.mean())
+                audit = audit_metric_reproduction(
+                    recomputed,
+                    expected_metrics[metric],
+                    args.cttp_runtime_mode,
+                    args.metric_audit_atol,
+                    args.stochastic_metric_rtol,
+                )
+                record[metric] = recomputed
+                record[f"{metric}_scorer_repeat_std"] = (
+                    float(values.std(ddof=1)) if values.size > 1 else 0.0
+                )
+                record[f"delta_{metric}"] = audit["difference"]
+                record[f"relative_delta_{metric}"] = audit["relative_difference"]
+                record[f"{metric}_audit_passed"] = audit["passed"]
+                record[f"{metric}_audit_criterion"] = audit["criterion"]
+                if not audit["passed"]:
+                    failures.append(
+                        f"{metric}: delta={audit['difference']:.6g}, "
+                        f"relative={audit['relative_difference']:.4%}, "
+                        f"criterion={audit['criterion']}"
+                    )
+            reproduction_rows.append(record)
+            if failures:
+                raise AuditError(
+                    f"Offline scorer reproduction failed for {action_name}/run{run}: "
+                    + "; ".join(failures)
+                )
+            print(
+                f"[run {run}] scorer audit PASS: {action_name}", flush=True
+            )
+
+        for column, name in enumerate(names):
+            audit_action(name, ts_embeddings[:, column], fixed["results"][name][run])
+        if original_ts_embeddings is not None:
+            audit_action("original", original_ts_embeddings, original_results[run])
 
         policies = []
         selected = select_max_cttp(scores.T, distances.T, strengths, q05, args.cttp_tolerance)
@@ -1336,6 +1497,11 @@ def _run_analysis(args):
         "action_source": "saved pointwise-median predictions only; candidates unused",
         "pareto_lambdas": list(lambdas),
         "cttp_tolerance": args.cttp_tolerance,
+        "cttp_runtime": scorer_runtime,
+        "scorer_repeats": scorer_repeats,
+        "scorer_seed": int(args.scorer_seed),
+        "deterministic_metric_audit_atol": float(args.metric_audit_atol),
+        "stochastic_metric_audit_rtol": float(args.stochastic_metric_rtol),
         "near_reference_thresholds": thresholds,
         "near_reference_threshold_source": str(teacher_manifest_path),
         "hybrid_oracle_available": original_payloads is not None,
@@ -1361,6 +1527,11 @@ def _run_analysis(args):
         "reference_alignment": "passed" if not args.allow_joint_reference else "joint-reference override enabled",
         "per_sample_cttp_reproduction": "passed",
         "offline_metric_reproduction": reproduction_rows,
+        "offline_metric_reproduction_mode": (
+            "stochastic Monte Carlo compatibility audit"
+            if scorer_runtime["stochastic"]
+            else "deterministic exact-tolerance audit"
+        ),
         "input_files_unchanged": unchanged_inputs,
         "q01_available": "q01" in thresholds,
         "q05_available": True,
@@ -1373,6 +1544,15 @@ def _run_analysis(args):
         "decision_scope": "policy-specific empirical ceiling on validation only",
         "diagnostic_only": True,
         "test_split_read_or_run": False,
+        "scorer_runtime_mode": args.cttp_runtime_mode,
+        "scorer_repeats": scorer_repeats,
+        "stochastic_scorer_caveat": (
+            "Historical CTTP validation used train-mode dropout. Oracle metrics are "
+            "Monte Carlo estimates under that legacy scorer distribution; Original "
+            "aggregate metrics are a single historical realization."
+            if scorer_runtime["stochastic"]
+            else None
+        ),
         "original_mean": original_mean,
         "best_fixed_condition": best_fixed_name,
         "best_fixed_mean": best_fixed_mean,
@@ -1436,6 +1616,15 @@ def build_parser():
     parser.add_argument("--pareto-lambdas", default=",".join(map(str, DEFAULT_LAMBDAS)))
     parser.add_argument("--cttp-tolerance", type=float, default=1e-6)
     parser.add_argument("--metric-audit-atol", type=float, default=1e-3)
+    parser.add_argument(
+        "--cttp-runtime-mode",
+        choices=["legacy_train", "eval"],
+        default="legacy_train",
+        help="Match historical validation scorer state or use deterministic eval mode.",
+    )
+    parser.add_argument("--scorer-repeats", type=int, default=3)
+    parser.add_argument("--scorer-seed", type=int, default=2026)
+    parser.add_argument("--stochastic-metric-rtol", type=float, default=0.05)
     parser.add_argument("--embedding-batch-size", type=int, default=128)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--allow-joint-reference", action="store_true")

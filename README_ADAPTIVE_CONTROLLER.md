@@ -419,6 +419,8 @@ bash scripts/synth-m/run_oracle_ceiling.sh
 
 这条命令不会调用 `run.py`、diffusion generation、Teacher/controller 训练或 test。可覆盖离线编码设备，例如 `DEVICE=cpu bash scripts/synth-m/run_oracle_ceiling.sh`。只有在 reference 本身随 strength 改变、且明确希望诊断 reference+strength 联合上限时，才设置 `ALLOW_JOINT_REFERENCE_ORACLE=1`；报告会据此标为 joint oracle，不能冒充 strength-only 结果。
 
+历史 validation evaluator 没有显式调用 `CTTP.eval()`，而当前 CTTP 的时间序列分支配置含 `dropout=0.1`。因此历史 aggregate metrics 是 frozen-parameter、train-mode dropout scorer 的一次随机实现，不能用 deterministic eval-mode 重编码后要求 `1e-3` 绝对一致。Oracle 脚本默认使用 `CTTP_RUNTIME_MODE=legacy_train`，保持参数冻结并用固定 seed 做 3 次 Monte Carlo 重编码；每个 fixed action 与历史结果按预先声明的 5% 对称相对误差做 stochastic compatibility audit，同时在每个 Oracle metric 中保存 scorer-repeat 标准差。该 5% 只用于判断是否仍属于同一个历史 scorer 分布，不会把历史 aggregate FID/J-FTSD 混入重组集合计算。可以显式设置 `CTTP_RUNTIME_MODE=eval` 做 deterministic sensitivity analysis，但它与历史 Original aggregate 不再是同一评价口径，不能替换 primary legacy-compatible 诊断。
+
 输出位于 `save/adaptive_validation/synth-m/stable_q1024_spa3/oracle_ceiling/`：manifest、integrity report、每 run/汇总 metrics、decision、strength usage、Pareto frontier、near-reference sensitivity，以及每个 run 的 CSV/NPZ assignments。研究分类只能是：
 
 - `USABLE_HEADROOM_PRESENT`：non-reference Pareto 或 hybrid 同时满足 CTTP 为 Original 的至少 99%、FID/J-FTSD 优于 Original、J-FTSD 优于 best-fixed、near-reference 不超过 cap，且至少 2/3 run 方向一致；说明瓶颈更可能在 Teacher/features/controller。

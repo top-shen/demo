@@ -14,7 +14,9 @@ from tools.analyze_oracle_ceiling import (
     REQUIRED_FIELDS,
     AuditError,
     _load_npz,
+    _metric_row,
     align_action_arrays,
+    audit_metric_reproduction,
     compose_selected,
     discover_thresholds,
     select_hybrid,
@@ -246,3 +248,57 @@ def test_17_loading_ignores_candidates_and_does_not_modify_input_file():
         assert recorded == before == sha256_file(path)
         assert config_before == sha256_file(config_path)
         assert ORIGINAL_FIELDS.issubset(loaded)
+
+
+def test_18_stochastic_reproduction_uses_declared_relative_not_hidden_absolute_tolerance():
+    deterministic = audit_metric_reproduction(
+        10.01, 10.0, "eval", absolute_tolerance=1e-3
+    )
+    assert not deterministic["passed"]
+    compatible = audit_metric_reproduction(
+        58.3586,
+        56.0,
+        "legacy_train",
+        stochastic_relative_tolerance=0.05,
+    )
+    assert compatible["passed"]
+    incompatible = audit_metric_reproduction(
+        62.0,
+        56.0,
+        "legacy_train",
+        stochastic_relative_tolerance=0.05,
+    )
+    assert not incompatible["passed"]
+    assert compatible["criterion"] == "symmetric_relative_difference<=0.05"
+
+
+def test_19_repeated_scorer_metrics_recompose_each_complete_set():
+    first = np.asarray([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    second = np.asarray([[2.0, 0.0], [0.0, 2.0], [2.0, 2.0]])
+    action_embeddings = np.stack([first, second])
+    repeated_actions = np.stack([action_embeddings, action_embeddings])
+    text = np.asarray([[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]])
+    repeated_text = np.stack([text, text])
+    selected = np.asarray([0, 1, 0])
+    recomposed = compose_selected(action_embeddings, selected)
+    row, assignment = _metric_row(
+        0,
+        "synthetic",
+        selected,
+        ["fixed_020", "fixed_095"],
+        np.asarray([0.2, 0.95]),
+        np.asarray([[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]]),
+        np.asarray([[0.7, 0.7, 0.7], [0.8, 0.8, 0.8]]),
+        repeated_actions,
+        repeated_text,
+        _statistics(recomposed, text),
+        "q05",
+        0.6,
+        np.zeros(3, dtype=bool),
+    )
+    assert row["scorer_repeats"] == 2
+    np.testing.assert_allclose(row["cttp_scorer_repeat_std"], 0.0)
+    np.testing.assert_array_equal(
+        assignment["selected_actions"],
+        ["fixed_020", "fixed_095", "fixed_020"],
+    )

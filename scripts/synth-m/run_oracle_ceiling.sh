@@ -12,6 +12,10 @@ RUNS="${RUNS:-3}"
 DEVICE="${DEVICE:-cuda:0}"
 EMBEDDING_BATCH_SIZE="${EMBEDDING_BATCH_SIZE:-128}"
 METRIC_AUDIT_ATOL="${METRIC_AUDIT_ATOL:-0.001}"
+CTTP_RUNTIME_MODE="${CTTP_RUNTIME_MODE:-legacy_train}"
+SCORER_REPEATS="${SCORER_REPEATS:-3}"
+SCORER_SEED="${SCORER_SEED:-2026}"
+STOCHASTIC_METRIC_RTOL="${STOCHASTIC_METRIC_RTOL:-0.05}"
 THRESHOLD_CALIBRATION="${THRESHOLD_CALIBRATION:-}"
 
 for path in \
@@ -39,6 +43,7 @@ fi
 echo "Running a validation-only policy-specific empirical ceiling."
 echo "Saved pointwise-median predictions are read; candidate arrays are ignored."
 echo "No generation, training, Teacher construction, or test evaluation will run."
+echo "CTTP audit mode: ${CTTP_RUNTIME_MODE}; repeats=${SCORER_REPEATS}"
 oracle_command=(
   python -u tools/analyze_oracle_ceiling.py
   --validation-root "${VALIDATION_ROOT}"
@@ -51,6 +56,10 @@ oracle_command=(
   --device "${DEVICE}"
   --embedding-batch-size "${EMBEDDING_BATCH_SIZE}"
   --metric-audit-atol "${METRIC_AUDIT_ATOL}"
+  --cttp-runtime-mode "${CTTP_RUNTIME_MODE}"
+  --scorer-repeats "${SCORER_REPEATS}"
+  --scorer-seed "${SCORER_SEED}"
+  --stochastic-metric-rtol "${STOCHASTIC_METRIC_RTOL}"
 )
 if [[ -n "${THRESHOLD_CALIBRATION}" ]]; then
   oracle_command+=(--threshold-calibration "${THRESHOLD_CALIBRATION}")
